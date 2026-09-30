@@ -121,8 +121,7 @@ def test_domain_settings_and_validation(apps):
     assert admin.put("/api/domains/" + domain_id, json={"name": "example.com", "account_id": account_id, "dns_sleep": 120, "auto_renew": False}).status_code == 200
     assert admin.put("/api/domains/" + domain_id, json={"name": "example.com", "account_id": account_id, "wildcard": False}).status_code == 400
     assert admin.put("/api/settings", json={"email": "bad"}).status_code == 422
-    assert admin.put("/api/settings", json={"email": "user@example.com", "public_url": "javascript:alert(1)"}).status_code == 422
-    assert admin.put("/api/settings", json={"email": "user@example.com", "public_url": "http://192.0.2.10:8001"}).status_code == 200
+    assert admin.put("/api/settings", json={"email": "user@example.com"}).status_code == 200
     assert admin.post("/api/domains/" + domain_id + "/jobs", json={"action": "issue"}).status_code == 400
 
 

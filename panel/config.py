@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from pathlib import Path
 import os
+import re
+import tempfile
 try:
     import tomllib
 except ModuleNotFoundError:  # Python 3.8–3.10
@@ -10,7 +12,7 @@ except ModuleNotFoundError:  # Python 3.8–3.10
 @dataclass
 class Config:
     root: Path
-    admin_host: str = "127.0.0.1"
+    admin_host: str = "0.0.0.0"
     admin_port: int = 8080
     public_host: str = "0.0.0.0"
     public_port: int = 8001
@@ -45,4 +47,35 @@ class Config:
                 raise ValueError(f"数据目录不能是符号链接：{path}")
             path.mkdir(exist_ok=True, mode=0o700)
             path.chmod(0o700)
+
+    def save_public_port(self, port):
+        """Atomically update the port while retaining unrelated settings and comments."""
+        path = self.root / "config.toml"
+        text = path.read_text(encoding="utf-8") if path.exists() else ""
+        table = re.search(r"(?m)^\s*\[service\][^\n]*\n?", text)
+        if table:
+            start = table.end()
+            following = re.search(r"(?m)^\s*\[", text[start:])
+            end = start + following.start() if following else len(text)
+            body = text[start:end]
+            key = re.compile(r'''(?m)^([ \t]*(?:public_port|"public_port"|'public_port')[ \t]*=[ \t]*)[^#\n]*''')
+            if key.search(body):
+                body = key.sub(lambda match: match.group(1) + str(port) + " ", body, count=1)
+            else:
+                body = f"public_port = {port}\n" + body
+            text = text[:start].rstrip("\n") + "\n" + body + text[end:]
+        else:
+            text = text.rstrip() + f"\n[service]\npublic_port = {port}\n"
+        if tomllib.loads(text)["service"]["public_port"] != port:
+            raise ValueError("无法更新 config.toml 中的下载端口")
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.root, delete=False) as file:
+                temporary = Path(file.name)
+                file.write(text)
+            temporary.chmod(0o600)
+            temporary.replace(path)
+        finally:
+            if temporary and temporary.exists():
+                temporary.unlink()
 

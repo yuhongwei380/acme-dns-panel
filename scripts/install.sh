@@ -124,5 +124,5 @@ EOF
   sudo systemctl enable acme-dns-panel
   sudo systemctl restart acme-dns-panel
 fi
-printf '\n安装完成：%s\n管理员：admin / 初始密码：admin\n管理：http://127.0.0.1:8080\n只读：http://服务器局域网IP:8001\n' "$PANEL_ROOT"
+printf '\n安装完成：%s\n管理员：admin / 初始密码：admin\n管理：http://服务器局域网IP:8080\n只读：http://服务器局域网IP:8001\n' "$PANEL_ROOT"
 

@@ -21,8 +21,7 @@ async function reload(renderView = true) {
   if (renderView) render();
 }
 function publicBase() {
-  if (state.settings.public_url) return state.settings.public_url;
-  const url = new URL(location.origin); url.port = state.settings.public_port;
+  const url = new URL(location.origin); url.protocol = 'http:'; url.port = state.settings.public_port;
   return url.origin;
 }
 function render() {
@@ -45,12 +44,23 @@ function renderJobs() {
   $('#content').innerHTML = `<div class="heading"><div><div class="eyebrow">ISSUE & RENEWAL</div><h1>任务记录</h1><p>签发与续期串行执行，日志中的账户密钥自动脱敏。</p></div><button data-action="refresh">刷新记录</button></div><div class="panel">${state.jobs.length ? `<div class="table-wrap"><table><thead><tr><th>域名</th><th>操作</th><th>状态</th><th>创建时间</th><th>日志</th></tr></thead><tbody>${state.jobs.map(j=>`<tr><td class="mono">${esc(j.domain_name)}</td><td>${j.action==='issue'?'申请证书':'检查续期'}</td><td>${badge(j.status)}</td><td class="mono small">${timeText(j.created)}</td><td><button data-action="logs" data-id="${j.id}">查看日志</button></td></tr>`).join('')}</tbody></table></div>` : '<div class="empty"><h3>还没有任务记录</h3><p>添加域名后点击「申请证书」，可以在这里跟踪进度。</p></div>'}</div>`;
 }
 function renderSettings() {
-  $('#content').innerHTML = `<div class="heading"><div><div class="eyebrow">SERVICE CONFIGURATION</div><h1>服务设置</h1><p>设置 ACME 联系邮箱和局域网下载地址。</p></div></div><div class="form-grid"><div><form id="settings-form" class="panel form-panel"><h3>证书服务</h3><label>ACME 联系邮箱<input type="email" name="email" value="${esc(state.settings.email)}" placeholder="you@example.com" required><span class="field-help">用于注册 CA 账户与接收证书相关通知。</span></label><label>对外下载地址<input type="url" name="public_url" value="${esc(state.settings.public_url)}" placeholder="${esc(publicBase())}"><span class="field-help">填写服务器实际局域网 IP 或主机名。留空使用当前访问主机；本机或 SSH 转发访问时需填写服务器局域网地址。</span></label><div class="form-actions"><button type="submit" class="primary">保存设置</button></div></form><form id="password-form" class="panel form-panel"><h3>管理员密码 <span class="mono muted small">admin</span></h3>${secretField('current_password','当前密码',true,'current-password')}${secretField('new_password','新密码',true,'new-password')}<div class="form-actions"><button type="submit">更新密码</button></div></form></div><aside class="panel form-panel"><h3>运行信息</h3><div class="system-line"><span class="muted">acme.sh</span><span>${state.settings.acme_installed?'已安装':'待安装'}</span></div><div class="system-line"><span class="muted">管理端口</span><span class="mono">${state.settings.admin_port}</span></div><div class="system-line"><span class="muted">下载端口</span><span class="mono">${state.settings.public_port}</span></div><div class="system-line"><span class="muted">续期检查</span><span>每天一次</span></div><p class="footnote">统一数据目录</p><p class="mono small path">${esc(state.settings.root)}</p><p class="footnote">监听地址和端口在 config.toml 中配置，修改后需重启服务。</p></aside></div>`;
+  $('#content').innerHTML = `<div class="heading"><div><div class="eyebrow">SERVICE CONFIGURATION</div><h1>服务设置</h1><p>设置 ACME 联系邮箱与证书下载端口。</p></div></div><div class="form-grid"><div><form id="settings-form" class="panel form-panel"><h3>证书服务</h3><label>ACME 联系邮箱<input type="email" name="email" value="${esc(state.settings.email)}" placeholder="you@example.com" required><span class="field-help">用于注册 CA 账户与接收证书相关通知。</span></label><div class="form-actions"><button type="submit" class="primary">保存设置</button></div></form><form id="download-form" class="panel form-panel"><h3>局域网下载服务</h3><label>下载端口<input type="number" name="public_port" min="1" max="65535" required value="${state.settings.public_port}"><span class="field-help">修改后点击重载即可生效，管理页面和证书任务继续运行。</span></label><p class="small muted">当前下载地址</p><a class="mono small path" id="download-address" href="${esc(publicBase())}" target="_blank" rel="noopener">${esc(publicBase())} ↗</a><p id="download-status" class="field-help" role="status"></p><div class="form-actions"><button type="submit" class="primary">重载下载服务</button></div></form><form id="password-form" class="panel form-panel"><h3>管理员密码 <span class="mono muted small">admin</span></h3>${secretField('current_password','当前密码',true,'current-password')}${secretField('new_password','新密码',true,'new-password')}<div class="form-actions"><button type="submit">更新密码</button></div></form></div><aside class="panel form-panel"><h3>运行信息</h3><div class="system-line"><span class="muted">acme.sh</span><span>${state.settings.acme_installed?'已安装':'待安装'}</span></div><div class="system-line"><span class="muted">管理端口</span><span class="mono">${state.settings.admin_port}</span></div><div class="system-line"><span class="muted">下载端口</span><span class="mono" id="runtime-public-port">${state.settings.public_port}</span></div><div class="system-line"><span class="muted">续期检查</span><span>每天一次</span></div><p class="footnote">统一数据目录</p><p class="mono small path">${esc(state.settings.root)}</p><p class="footnote">管理监听地址和端口在 config.toml 中配置，修改后需重启服务。下载端口可在此页面修改并重载。</p></aside></div>`;
   initEyes($('#content'));
   $('#settings-form').addEventListener('submit', async event => {event.preventDefault(); await submit(event.target, async () => { await api('/settings','PUT',Object.fromEntries(new FormData(event.target))); await reload(false); toast('服务设置已保存'); });});
+  $('#download-form').addEventListener('submit',async event=>{
+    event.preventDefault(); const button=$('button[type="submit"]',event.target); button.disabled=true;
+    const status=$('#download-status'); status.textContent='正在重载下载服务…';
+    try {
+      const result=await api('/public-service/reload','POST',{public_port:Number(new FormData(event.target).get('public_port'))});
+      state.settings.public_port=result.public_port;
+      const address=$('#download-address'); address.href=publicBase(); address.textContent=publicBase()+' ↗';
+      $('#runtime-public-port').textContent=result.public_port;
+      $('#download-status').textContent='下载服务已就绪，新端口已保存。'; toast('下载服务已重载');
+    } catch(error) {status.textContent=error.message; toast(error.message);} finally {button.disabled=false;}
+  });
   $('#password-form').addEventListener('submit', async event => {event.preventDefault(); await submit(event.target, async () => { await api('/password','POST',Object.fromEntries(new FormData(event.target))); showLogin(); toast('密码已更新，请重新登录'); });});
 }
-function editor(title, body) { $('#editor-title').textContent = title; $('#editor-body').innerHTML = body; initEyes($('#editor-body')); $('#editor').showModal(); }
+function editor(title, body) { $('#editor-title').textContent = title; $('#editor-body').innerHTML = body; initEyes($('#editor-body')); enhanceSelects($('#editor-body')); $('#editor').showModal(); }
 async function submit(form, fn) {
   const button = $('button[type="submit"]', form); button.disabled = true;
   try { await fn(); } catch (error) {toast(error.message);} finally {button.disabled = false;}

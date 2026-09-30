@@ -5,14 +5,14 @@ from fastapi.testclient import TestClient
 from panel.acme import AcmeRunner
 from panel.certificates import domain_conf
 from panel.config import Config
-from panel.web import SettingsInput, create_apps
+from panel.web import PublicPortInput, create_apps
 import pytest
 
 
-@pytest.mark.parametrize("url", ["http://host'evil:8001", "http://bad host:8001", "http://host:99999", "http://user:pass@host:8001", "http://host/path", "http://host/?x=1"])
-def test_download_base_rejects_unsafe_urls(url):
+@pytest.mark.parametrize("port", [0, 65536, -1, True, 8001.5, "8001"])
+def test_download_port_rejects_invalid_values(port):
     with pytest.raises(ValueError):
-        SettingsInput(email="user@example.com", public_url=url)
+        PublicPortInput(public_port=port)
 
 
 def test_rotation_clears_sourced_cloudflare_credentials(tmp_path):

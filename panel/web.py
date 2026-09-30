@@ -8,7 +8,6 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from urllib.parse import urlsplit
 from typing import Dict
 
 from fastapi import FastAPI, HTTPException, Request, Depends
@@ -92,7 +91,6 @@ class JobInput(BaseModel):
 
 class SettingsInput(BaseModel):
     email: str = Field(max_length=254)
-    public_url: str = Field(default="", max_length=500)
 
     @field_validator("email")
     @classmethod
@@ -101,31 +99,9 @@ class SettingsInput(BaseModel):
             raise ValueError("请填写有效的联系邮箱")
         return value
 
-    @field_validator("public_url")
-    @classmethod
-    def valid_url(cls, value):
-        value = value.strip().rstrip("/")
-        if not value:
-            return value
-        try:
-            parsed = urlsplit(value)
-            port = parsed.port
-        except ValueError:
-            raise ValueError("对外访问地址格式不正确")
-        if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password or parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
-            raise ValueError("请填写使用服务器实际 IP 或主机名的完整 HTTP / HTTPS 地址，不包含路径")
-        if port is not None and not 1 <= port <= 65535:
-            raise ValueError("端口不正确")
-        try:
-            ipaddress.ip_address(parsed.hostname)
-        except ValueError:
-            try:
-                host = parsed.hostname.encode("idna").decode("ascii")
-            except UnicodeError:
-                raise ValueError("下载地址主机名不正确")
-            if not all(re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", part, re.I) for part in host.split(".")):
-                raise ValueError("下载地址主机名不正确")
-        return value
+
+class PublicPortInput(BaseModel):
+    public_port: int = Field(ge=1, le=65535, strict=True)
 
 
 def create_apps(config=None, runner=None):
@@ -380,19 +356,33 @@ def create_apps(config=None, runner=None):
 
     @admin.get("/api/settings", dependencies=[Depends(session)])
     def settings():
-        return {"email": store.setting("email"), "public_url": store.setting("public_url"),
+        return {"email": store.setting("email"),
                 "root": str(config.root), "acme_installed": (config.root / "acme" / "acme.sh").is_file(),
                 "admin_port": config.admin_port, "public_port": config.public_port}
 
     @admin.put("/api/settings", dependencies=[Depends(session)])
     def save_settings(payload: SettingsInput):
         store.set_setting("email", payload.email)
-        store.set_setting("public_url", payload.public_url)
         return {"ok": True}
+
+    @admin.post("/api/public-service/reload", dependencies=[Depends(session)])
+    async def reload_public_service(payload: PublicPortInput):
+        if payload.public_port == config.admin_port:
+            raise HTTPException(422, "下载端口不能与管理端口相同")
+        service = getattr(admin.state, "public_service", None)
+        if service is None:
+            raise HTTPException(503, "当前运行方式不支持重载，请使用 python -m panel 启动服务")
+        try:
+            await service.reload(payload.public_port)
+        except OSError:
+            raise HTTPException(409, "重载失败：端口被占用、无权监听或配置无法写入，原下载服务保持运行")
+        except (ValueError, RuntimeError) as error:
+            raise HTTPException(409, str(error))
+        return {"ok": True, "public_port": config.public_port}
 
     @public.get("/api/certificates")
     def public_certificates():
-        return {"public_url": store.setting("public_url"), "domains": [
+        return {"domains": [
             {"name": d["name"], "wildcard": bool(d["wildcard"]), "staging": d["server"] == "letsencrypt_test",
              "certificate": managed_certificate(config.root, d)}
             for d in store.rows("SELECT * FROM domains ORDER BY name")

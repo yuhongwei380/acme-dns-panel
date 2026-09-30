@@ -1,5 +1,5 @@
 [service]
-admin_host = "127.0.0.1"
+admin_host = "0.0.0.0"
 admin_port = 8080
 public_host = "0.0.0.0"
 public_port = 8001

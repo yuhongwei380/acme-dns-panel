@@ -1,9 +1,9 @@
 'use strict';
-let libraryData = {domains:[],public_url:''};
+let libraryData = {domains:[]};
 function renderLibrary() {
   const query = $('#search').value.trim().toLowerCase();
   const domains = libraryData.domains.filter(d => d.name.includes(query));
-  const base = libraryData.public_url || location.origin;
+  const base = location.origin;
   if (!domains.length) {
     $('#library').innerHTML = `<div class="panel empty"><h3>${query ? '未找到匹配的域名' : '还没有可展示的域名'}</h3><p>${query ? '试试其他关键词。' : '管理员添加域名并签发后，证书会出现在这里。'}</p></div>`; return;
   }
@@ -26,7 +26,7 @@ $('#search').addEventListener('input', renderLibrary);
 $('#refresh').addEventListener('click', refreshLibrary);
 document.addEventListener('click', event => {
   const copy = event.target.closest('[data-copy]'); if (copy) copyText(copy.dataset.copy);
-  const wget = event.target.closest('[data-wget]'); if (wget) copyText(wgetCommand(libraryData.public_url || location.origin, wget.dataset.wget));
+  const wget = event.target.closest('[data-wget]'); if (wget) copyText(wgetCommand(location.origin, wget.dataset.wget));
 });
 refreshLibrary();
 setInterval(refreshLibrary, 30000);

@@ -5,6 +5,7 @@ import uvicorn
 
 from .config import Config
 from .web import create_apps
+from .http_service import PublicHTTPService
 
 
 async def serve():
@@ -22,16 +23,19 @@ async def serve():
         except BlockingIOError:
             raise SystemExit("已有实例使用此数据目录")
     admin, public = create_apps(config)
-    servers = [uvicorn.Server(uvicorn.Config(admin, host=config.admin_host, port=config.admin_port, access_log=False)),
-               uvicorn.Server(uvicorn.Config(public, host=config.public_host, port=config.public_port, access_log=False))]
-    # Both listeners share one lifecycle and stop together if either cannot bind.
-    tasks = [asyncio.create_task(server.serve()) for server in servers]
+    downloads = PublicHTTPService(config, public)
+    admin.state.public_service = downloads
+    server = uvicorn.Server(uvicorn.Config(admin, host=config.admin_host, port=config.admin_port, access_log=False))
+    tasks = []
     try:
-        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-        for server in servers:
-            server.should_exit = True
-        await asyncio.gather(*tasks)
+        await downloads.start()
+        tasks = [asyncio.create_task(server.serve()), asyncio.create_task(downloads.failed.wait())]
+        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        server.should_exit = True
+        tasks[1].cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
     finally:
+        await downloads.close()
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)

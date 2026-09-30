@@ -1,0 +1,9 @@
+[service]
+admin_host = "127.0.0.1"
+admin_port = 8080
+public_host = "0.0.0.0"
+public_port = 8001
+# Set true only when the admin panel is accessed through HTTPS.
+secure_cookie = false
+task_timeout = 3600
+

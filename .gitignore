@@ -1,0 +1,16 @@
+__pycache__/
+.pytest_cache/
+.venv/
+.runtime/
+*.pyc
+# Runtime directories if the project itself is used as the install root.
+/app/
+/venv/
+/acme/
+/accounts/
+/ssl-renew/
+/data/
+/logs/
+/config.toml
+/.panel-install.json
+

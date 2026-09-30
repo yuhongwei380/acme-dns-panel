@@ -1,0 +1,7 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ACME · 证书下载</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/assets/style.css"><script src="/assets/common.js" defer></script><script src="/assets/public.js" defer></script></head>
+<body><header class="topbar"><div class="brand"><span class="mark" aria-hidden="true">∗</span>ACME <span class="muted">/ 证书下载</span></div><span class="badge good">只读 · 免登录</span></header>
+<main class="shell library"><div class="heading"><div><div class="eyebrow">LOCAL CERTIFICATE LIBRARY</div><h1>域名与证书</h1><p>找到你的域名，复制地址，在需要的机器上下载证书。</p></div><button id="refresh">刷新证书</button></div><div class="notice">证书续期后下载地址保持不变。此页面向可信局域网提供证书与私钥。</div><label class="public-search" for="search">查找域名<input id="search" type="search" placeholder="输入域名，例如 example.com"></label><div id="library"><div class="loading">正在读取证书…</div></div><footer class="public-footer"><span>ACME DNS Panel · 局域网证书服务</span><span id="updated"></span></footer></main>
+<dialog id="copy-dialog"><header class="dialog-head"><h2>复制下载地址</h2><button type="button" data-close="copy-dialog" aria-label="关闭">×</button></header><div class="dialog-body"><p class="muted small">浏览器未允许自动复制，按 Ctrl+C 或长按复制下方内容。</p><textarea id="copy-text" readonly aria-label="待复制内容"></textarea></div></dialog><div id="toast" class="toast" role="status" hidden></div>
+</body></html>
+

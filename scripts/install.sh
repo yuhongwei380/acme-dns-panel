@@ -99,7 +99,7 @@ After=network-online.target
 Type=simple
 User=$SERVICE_USER
 Group=$SERVICE_GROUP
-WorkingDirectory="$PANEL_ROOT/app"
+WorkingDirectory=$PANEL_ROOT/app
 Environment="ACME_PANEL_ROOT=$PANEL_ROOT"
 ExecStart="$PANEL_ROOT/venv/bin/python" -m panel
 Restart=on-failure
@@ -116,6 +116,9 @@ KillMode=control-group
 [Install]
 WantedBy=multi-user.target
 EOF
+  if command -v systemd-analyze >/dev/null; then
+    systemd-analyze verify "$PANEL_ROOT/data/acme-dns-panel.service"
+  fi
   sudo install -m 644 "$PANEL_ROOT/data/acme-dns-panel.service" /etc/systemd/system/acme-dns-panel.service
   sudo systemctl daemon-reload
   sudo systemctl enable acme-dns-panel

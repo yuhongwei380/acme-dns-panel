@@ -130,6 +130,23 @@ cd ~/acme-dns-panel/app
 ACME_PANEL_ROOT=~/acme-dns-panel ../venv/bin/python -m panel
 ```
 
+### systemd 服务文件校验
+
+安装脚本在注册服务前使用 `systemd-analyze verify` 校验生成的 unit（系统提供此命令时）。`WorkingDirectory` 使用不带引号的绝对路径；`Environment` 和 `ExecStart` 按各自的 systemd 语法处理引号。
+
+如果旧版安装报 `bad unit file setting`，可先修复两个服务文件的 WorkingDirectory，再重新加载和启动：
+
+```bash
+# 默认安装目录；自定义部署时改为实际目录
+PANEL_ROOT="$HOME/acme-dns-panel"
+sed -i 's/^WorkingDirectory="\(.*\)"$/WorkingDirectory=\1/' "$PANEL_ROOT/data/acme-dns-panel.service"
+sudo sed -i 's/^WorkingDirectory="\(.*\)"$/WorkingDirectory=\1/' /etc/systemd/system/acme-dns-panel.service
+sudo systemd-analyze verify /etc/systemd/system/acme-dns-panel.service
+sudo systemctl daemon-reload
+sudo systemctl restart acme-dns-panel
+sudo systemctl status acme-dns-panel --no-pager
+```
+
 ### 备份和迁移
 
 停止服务后备份整个统一目录。迁移后重新运行部署脚本建立本机虚拟环境、重新注册 systemd 服务。acme.sh 安装记录中包含绝对路径，第一版迁移要求保持相同的根目录路径，尚不支持自动重写迁移路径；不把原主机 venv 作为跨机器可用环境。

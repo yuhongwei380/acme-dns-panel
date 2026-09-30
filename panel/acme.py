@@ -68,21 +68,23 @@ class AcmeRunner:
         proc = await asyncio.create_subprocess_exec(
             *args, env=self.environment(credentials), stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT, start_new_session=(os.name == "posix"), limit=1024 * 1024)
+        async def read_output():
+            # Chunked reads avoid a long output line deadlocking the subprocess.
+            pending = b""
+            while chunk := await proc.stdout.read(4096):
+                pending += chunk
+                while b"\n" in pending:
+                    line, pending = pending.split(b"\n", 1)
+                    self.append(job_id, redact(line.decode("utf-8", "replace") + "\n", credentials))
+                if len(pending) > 65536:
+                    pending = b""
+                    self.append(job_id, "[过长日志行已省略]\n")
+            if pending:
+                self.append(job_id, redact(pending.decode("utf-8", "replace"), credentials))
+            return await proc.wait()
+
         try:
-            async with asyncio.timeout(self.config.task_timeout):
-                # Chunked reads avoid a long output line deadlocking the subprocess.
-                pending = b""
-                while chunk := await proc.stdout.read(4096):
-                    pending += chunk
-                    while b"\n" in pending:
-                        line, pending = pending.split(b"\n", 1)
-                        self.append(job_id, redact(line.decode("utf-8", "replace") + "\n", credentials))
-                    if len(pending) > 65536:
-                        pending = b""
-                        self.append(job_id, "[过长日志行已省略]\n")
-                if pending:
-                    self.append(job_id, redact(pending.decode("utf-8", "replace"), credentials))
-                return await proc.wait()
+            return await asyncio.wait_for(read_output(), timeout=self.config.task_timeout)
         finally:
             if proc.returncode is None:
                 if os.name == "posix":
@@ -175,14 +177,13 @@ class JobManager:
                 continue
             self.store.execute("UPDATE jobs SET status='running', started=? WHERE id=?", (now(), job["id"]))
             try:
-                async with asyncio.timeout(self.config.task_timeout):
-                    await self.runner.run(job)
+                await asyncio.wait_for(self.runner.run(job), timeout=self.config.task_timeout)
                 status = "success"
                 self.store.execute("UPDATE domains SET last_checked=? WHERE id=?", (now(), job["domain_id"]))
             except asyncio.CancelledError:
                 self.store.execute("UPDATE jobs SET status='interrupted', finished=? WHERE id=?", (now(), job["id"]))
                 raise
-            except TimeoutError:
+            except asyncio.TimeoutError:
                 status = "failed"
                 self.runner.append(job["id"], "\n任务超时，子进程已终止。请检查网络和 DNS 配置后重试。\n")
             except Exception as exc:

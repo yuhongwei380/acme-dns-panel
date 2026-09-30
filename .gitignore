@@ -2,6 +2,7 @@ __pycache__/
 .pytest_cache/
 .venv/
 .runtime/
+.compat-runtime/
 *.pyc
 # Runtime directories if the project itself is used as the install root.
 /app/

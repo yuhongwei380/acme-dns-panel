@@ -14,11 +14,18 @@ fi
 INSTALL_SERVICE=1
 if [[ "${1:-}" == --no-service ]]; then INSTALL_SERVICE=0; shift; fi
 if [[ $# != 0 ]]; then echo '用法：ACME_PANEL_ROOT=/path bash scripts/install.sh [--no-service]' >&2; exit 1; fi
-for dependency in python3 curl tar openssl sha256sum; do
+for dependency in curl tar openssl sha256sum; do
   command -v "$dependency" >/dev/null || { echo "缺少依赖：$dependency" >&2; exit 1; }
 done
-python3 -c 'import sys; assert sys.version_info >= (3,11), "Python 3.11+ required"'
 SOURCE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$SOURCE_DIR/scripts/python-runtime.sh"
+select_panel_python
+printf '使用 Python：%s (%s)\n' "$PYTHON_BIN" "$("$PYTHON_BIN" --version)"
+if ! "$PYTHON_BIN" -c 'import venv, ensurepip' >/dev/null 2>&1; then
+  PYTHON_VERSION="$("$PYTHON_BIN" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+  echo "缺少所选 Python 的 venv / ensurepip 模块。Ubuntu 请安装对应版本：sudo apt-get install python${PYTHON_VERSION}-venv" >&2
+  exit 1
+fi
 PANEL_ROOT="${ACME_PANEL_ROOT:-$HOME/acme-dns-panel}"
 mkdir -p -- "$PANEL_ROOT"
 PANEL_ROOT="$(cd -- "$PANEL_ROOT" && pwd)"
@@ -47,7 +54,7 @@ fi
 if [[ ! -f "$PANEL_ROOT/config.toml" ]]; then
   cp -- "$SOURCE_DIR/config.example.toml" "$PANEL_ROOT/config.toml"
 fi
-python3 -m venv "$PANEL_ROOT/venv"
+"$PYTHON_BIN" -m venv "$PANEL_ROOT/venv"
 "$PANEL_ROOT/venv/bin/python" -m pip install -r "$PANEL_ROOT/app/requirements.txt"
 
 # Pin and checksum the upstream release; never pipe remote content directly to sh.

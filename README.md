@@ -4,7 +4,7 @@
 
 ## 首次部署（Linux）
 
-要求 Python 3.11+、venv、curl、tar、openssl、sha256sum 和 systemd。以证书所属的普通用户运行，不要直接使用 root。
+要求 Python 3.8+、venv、curl、tar、openssl、sha256sum 和 systemd。以证书所属的普通用户运行，不要直接使用 root。
 
 ```bash
 # Debian / Ubuntu：如缺少依赖
@@ -16,6 +16,17 @@ bash scripts/install.sh
 # 或指定统一安装目录
 ACME_PANEL_ROOT=/home/vesoft/acme-dns-panel bash scripts/install.sh
 ```
+
+Ubuntu 20.04 默认的 Python 3.8、Ubuntu 22.04 默认的 Python 3.10 均已满足要求，可直接使用上面的默认安装命令。如果希望使用已安装的 Python 3.12，可安装对应的 venv 包并显式选择该解释器：
+
+```bash
+sudo apt-get install python3.12-venv
+ACME_PANEL_PYTHON=/usr/bin/python3.12 bash scripts/install.sh
+# 如果已经位于 scripts 目录：
+ACME_PANEL_PYTHON=/usr/bin/python3.12 bash install.sh
+```
+
+脚本优先检查 `python3`，版本不足时自动尝试 `python3.14`、`python3.13`、`python3.12`、`python3.11`、`python3.10`、`python3.9`、`python3.8`。设置 `ACME_PANEL_PYTHON` 时只使用指定解释器，失败会明确报错；选中的解释器用于创建虚拟环境，后续服务使用虚拟环境中的 Python。不需要修改系统默认 `python3`。
 
 安装脚本创建 Python 虚拟环境，安装并校验固定版本 acme.sh 3.1.1，初始化数据库，再通过 sudo 注册并启动 systemd 服务。不会修改原有 `~/.acme.sh`、shell 配置或 cron。首次部署需要联网；普通安装不会升级已安装的 acme.sh。重复执行保留配置、账户、密码与证书。
 

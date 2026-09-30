@@ -262,7 +262,7 @@ def test_subprocess_redacts_and_times_out(apps):
     code = asyncio.run(runner.process([sys.executable,"-c","import os; print(os.environ['CF_Token'])"], {"CF_Token":"redact-this-token"}, job_id))
     assert code == 0
     assert "redact-this-token" not in store.one("SELECT log FROM jobs WHERE id=?", (job_id,))["log"]
-    with pytest.raises(TimeoutError):
+    with pytest.raises(asyncio.TimeoutError):
         asyncio.run(runner.process([sys.executable,"-c","import time; time.sleep(15)"], {}, job_id))
     assert "secret-value" not in redact("token=secret-value", {"CF_Token":"secret-value"})
 

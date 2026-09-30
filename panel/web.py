@@ -9,6 +9,7 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
+from typing import Dict
 
 from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.responses import FileResponse, JSONResponse
@@ -18,6 +19,7 @@ from pydantic import BaseModel, Field, field_validator
 from .acme import JobManager
 from .certificates import managed_certificate, domain_issued
 from .config import Config
+from .compat import run_blocking
 from .providers import PROVIDERS, BY_ID
 from .store import Store, hash_password, check_password, now
 
@@ -36,7 +38,7 @@ class PasswordChange(BaseModel):
 class AccountInput(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     provider: str
-    credentials: dict[str, str]
+    credentials: Dict[str, str]
 
 
 def normalize_domain(value):
@@ -181,7 +183,7 @@ def create_apps(config=None, runner=None):
         recent.append(time.monotonic())
         failures[ip] = recent
         # Password hashing is intentionally outside the event loop.
-        valid = await asyncio.to_thread(check_password, payload.password, store.setting("password"))
+        valid = await run_blocking(check_password, payload.password, store.setting("password"))
         if not valid:
             if len(failures) > 1000:
                 failures.clear()
@@ -207,9 +209,9 @@ def create_apps(config=None, runner=None):
 
     @admin.post("/api/password")
     async def password(payload: PasswordChange, current=Depends(session)):
-        if not await asyncio.to_thread(check_password, payload.current_password, store.setting("password")):
+        if not await run_blocking(check_password, payload.current_password, store.setting("password")):
             raise HTTPException(400, "当前密码不正确")
-        encoded = await asyncio.to_thread(hash_password, payload.new_password)
+        encoded = await run_blocking(hash_password, payload.new_password)
         with store.connect() as db:
             db.execute("UPDATE settings SET value=? WHERE key='password'", (encoded,))
             db.execute("DELETE FROM sessions")
@@ -265,7 +267,7 @@ def create_apps(config=None, runner=None):
         if set(payload.credentials) - allowed:
             raise HTTPException(400, "包含不支持的密钥字段")
         # Missing values preserve credentials; explicit empty optional values clear them.
-        credentials = existing | payload.credentials
+        credentials = {**existing, **payload.credentials}
         for field in provider["fields"]:
             if field["required"] and not credentials.get(field["name"]):
                 raise HTTPException(400, f"请填写 {field['label']}")

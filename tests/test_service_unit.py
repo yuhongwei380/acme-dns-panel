@@ -4,6 +4,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -23,3 +24,21 @@ def test_generated_unit_uses_absolute_working_directory_without_quotes(root):
     assert shlex.split(settings["ExecStart"]) == [root + "/venv/bin/python", "-m", "panel"]
     assert shlex.split(settings["Environment"]) == ["ACME_PANEL_ROOT=" + root]
     assert shlex.split(settings["ReadWritePaths"]) == [root]
+
+
+@pytest.mark.parametrize("settings,admin_port,public_port", [
+    ('[service]\nadmin_port=9080\npublic_port=9001\n', 9080, 9001),
+    ('[service]\npublic_port=9443 # custom download port\n', 8080, 9443),
+    ('[service]\n', 8080, 8001),
+])
+def test_install_completion_addresses_use_service_configuration(tmp_path, settings, admin_port, public_port):
+    repo = Path(__file__).resolve().parents[1]
+    installer = (repo / "scripts/install.sh").read_text(encoding="utf-8")
+    summary = installer.split("# Use the same installed configuration loader as the running service.\n", 1)[1]
+    code = summary.split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+    (tmp_path / "config.toml").write_text(settings, encoding="utf-8")
+    result = subprocess.run([sys.executable, "-c", code], cwd=repo,
+                            env={**os.environ, "ACME_PANEL_ROOT": str(tmp_path), "PYTHONIOENCODING": "utf-8"},
+                            capture_output=True, text=True, encoding="utf-8", check=True)
+    assert f"管理：http://服务器局域网IP:{admin_port}" in result.stdout
+    assert f"只读：http://服务器局域网IP:{public_port}" in result.stdout

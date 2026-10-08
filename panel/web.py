@@ -9,6 +9,7 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Dict
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.responses import FileResponse, JSONResponse
@@ -80,8 +81,19 @@ class DomainInput(BaseModel):
     @field_validator("server")
     @classmethod
     def valid_server(cls, value):
-        if value not in {"letsencrypt", "letsencrypt_test"}:
-            raise ValueError("不支持的 CA")
+        if value in {"letsencrypt", "zerossl", "buypass", "letsencrypt_test"}:
+            return value
+        if len(value) > 2048 or any(c.isspace() or ord(c) < 32 or c in "'\"\\`$" for c in value):
+            raise ValueError("请填写有效的 HTTPS ACME Directory 地址")
+        try:
+            url = urlsplit(value)
+            valid = (url.scheme == "https" and url.hostname and url.path not in {"", "/"}
+                     and not url.username and not url.password and not url.fragment)
+            url.port  # Reject malformed ports before passing the URL to acme.sh.
+        except ValueError:
+            valid = False
+        if not valid:
+            raise ValueError("请填写有效的 HTTPS ACME Directory 地址")
         return value
 
 
@@ -289,6 +301,8 @@ def create_apps(config=None, runner=None):
 
     @admin.post("/api/domains", dependencies=[Depends(session)])
     def add_domain(payload: DomainInput):
+        if payload.server == "letsencrypt_test":
+            raise HTTPException(400, "新域名请使用正式 CA；测试地址可通过「其他」自行填写")
         account = store.one("SELECT * FROM accounts WHERE id=?", (payload.account_id,))
         if not account:
             raise HTTPException(400, "未检测到所选 DNS 账户，无法添加域名。请先在「DNS 账户」中完成配置")
@@ -383,7 +397,8 @@ def create_apps(config=None, runner=None):
     @public.get("/api/certificates")
     def public_certificates():
         return {"domains": [
-            {"name": d["name"], "wildcard": bool(d["wildcard"]), "staging": d["server"] == "letsencrypt_test",
+            {"name": d["name"], "wildcard": bool(d["wildcard"]), "staging": d["server"] in {
+                "letsencrypt_test", "https://acme-staging-v02.api.letsencrypt.org/directory"},
              "certificate": managed_certificate(config.root, d)}
             for d in store.rows("SELECT * FROM domains ORDER BY name")
         ]}
@@ -408,4 +423,3 @@ def create_apps(config=None, runner=None):
         return FileResponse(STATIC / "public.html")
 
     return admin, public
-

@@ -124,5 +124,15 @@ EOF
   sudo systemctl enable acme-dns-panel
   sudo systemctl restart acme-dns-panel
 fi
-printf '\n安装完成：%s\n管理员：admin / 初始密码：admin\n管理：http://服务器局域网IP:8080\n只读：http://服务器局域网IP:8001\n' "$PANEL_ROOT"
+# Use the same installed configuration loader as the running service.
+(cd "$PANEL_ROOT/app" && ACME_PANEL_ROOT="$PANEL_ROOT" "$PANEL_ROOT/venv/bin/python" - <<'PY'
+from panel.config import Config
+
+config = Config.load()
+print(f'\n安装完成：{config.root}')
+print('管理员：admin / 初始密码：admin')
+print(f'管理：http://服务器局域网IP:{config.admin_port}')
+print(f'只读：http://服务器局域网IP:{config.public_port}')
+PY
+)
 

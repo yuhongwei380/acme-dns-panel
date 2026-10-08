@@ -98,7 +98,7 @@ wget "http://${SERVER_IP}:8001/example.com/privkey.pem"
 
 可更改域名的等待时间和自动续期开关。第一版不允许直接修改已添加域名的主域名、DNS 账户、SAN、CA 或密钥类型，以避免隐式覆盖申请。移除域名会停止续期并撤下公开下载，磁盘证书及 acme.sh 状态保留；重新添加域名使用独立的签发状态目录，需重新申请后才开放下载。暂不提供现有 `~/.acme.sh` 证书自动导入。
 
-测试时可选择 Let's Encrypt 测试环境，其证书不被客户端信任，页面会明确标识。
+证书颁发机构默认使用正式版 Let's Encrypt，选项包括 Let's Encrypt、ZeroSSL、Buypass 和「其他」，不再预置测试环境。「其他」允许填写完整 HTTPS ACME Directory 地址。ZeroSSL 由 acme.sh 使用服务设置中的联系邮箱自动获取 EAB 并注册；需要额外 EAB 的自定义 CA 应先在对应 acme.sh 账户中完成注册。Buypass 已停止 TLS/SSL 签发与续期，选项保留并明确提示停用（[官方公告](https://www.buypass.com/products/tls-ssl-certificates/discontinues-issuance-of-tls-ssl-certificates)）。旧版测试 CA 域名保留原配置和非受信任标识，不会自动切换；改用正式 CA 需移除后重新添加。
 
 ## 服务配置
 

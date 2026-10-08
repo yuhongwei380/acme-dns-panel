@@ -216,10 +216,12 @@ def test_jobs_queue_and_daily_scheduling(apps):
     assert restarted.one("SELECT * FROM jobs WHERE action='renew'")["status"] == "interrupted"
 
 
-def test_acme_issue_install_and_renew_arguments(apps):
+@pytest.mark.parametrize("server", ["letsencrypt", "zerossl", "buypass", "https://ca.example.com/acme/directory"])
+def test_acme_issue_install_and_renew_arguments(apps, server):
     admin, public, store, root = apps
     authenticate(admin)
     account_id, domain_id = account_and_domain(admin)
+    store.execute("UPDATE domains SET server=? WHERE id=?", (server, domain_id))
     store.set_setting("email", "user@example.com")
     (root / "acme/acme.sh").write_text("mock")
     calls = []
@@ -242,6 +244,9 @@ def test_acme_issue_install_and_renew_arguments(apps):
     issue = next(args for args, _ in calls if "--issue" in args)
     assert "*.example.com" in issue and "--force" not in issue
     assert issue[issue.index("--dns") + 1] == "dns_cf"
+    assert issue[issue.index("--server") + 1] == server
+    register = calls[0][0]
+    assert register[register.index("--server") + 1] == server
     assert str(root / "accounts" / account_id) in issue
     assert str(root / "accounts" / account_id / "certs" / domain_id) in issue
     install = next(args for args, _ in calls if "--install-cert" in args)
@@ -251,6 +256,44 @@ def test_acme_issue_install_and_renew_arguments(apps):
     asyncio.run(runner.run(store.one("SELECT * FROM jobs WHERE id=?", (job_id,))))
     renew = next(args for args, _ in calls if "--renew" in args)
     assert "--ecc" in renew and "--force" not in renew
+    assert renew[renew.index("--server") + 1] == server
+
+
+@pytest.mark.parametrize("server", ["letsencrypt", "zerossl", "buypass", "https://ca.example.com/acme/directory"])
+def test_authority_is_saved_and_preserved_on_settings_edit(apps, server):
+    admin, public, store, root = apps
+    authenticate(admin)
+    account_id, _ = account_and_domain(admin)
+    payload = {"name": "second.example.com", "account_id": account_id, "server": server}
+    response = admin.post("/api/domains", json=payload)
+    assert response.status_code == 200, response.text
+    domain_id = response.json()["id"]
+    assert store.one("SELECT server FROM domains WHERE id=?", (domain_id,))["server"] == server
+    assert admin.put("/api/domains/" + domain_id, json={**payload, "dns_sleep": 120}).status_code == 200
+
+
+@pytest.mark.parametrize("server", ["other", "--help", "http://ca.example.com/directory",
+    "https://ca.example.com", "https://user:pass@ca.example.com/directory",
+    "https://ca.example.com/directory#fragment", "https://ca.example.com:bad/directory",
+    "https://ca.example.com/dir'ectory", "https://ca.example.com/dir\nectory"])
+def test_invalid_custom_authority_rejected(server):
+    from panel.web import DomainInput
+    with pytest.raises(ValueError):
+        DomainInput(name="example.com", account_id="a", server=server)
+
+
+def test_legacy_staging_is_preserved_but_not_offered_for_new_domains(apps):
+    admin, public, store, root = apps
+    authenticate(admin)
+    account_id, domain_id = account_and_domain(admin)
+    payload = {"name": "example.com", "account_id": account_id, "server": "letsencrypt_test"}
+    assert admin.post("/api/domains", json={**payload, "name": "second.example.com"}).status_code == 400
+    store.execute("UPDATE domains SET server='letsencrypt_test' WHERE id=?", (domain_id,))
+    assert admin.put("/api/domains/" + domain_id, json={**payload, "dns_sleep": 120}).status_code == 200
+    assert public.get("/api/certificates").json()["domains"][0]["staging"] is True
+    staging_url = "https://acme-staging-v02.api.letsencrypt.org/directory"
+    assert admin.post("/api/domains", json={**payload, "name": "second.example.com", "server": staging_url}).status_code == 200
+    assert all(d["staging"] for d in public.get("/api/certificates").json()["domains"])
 
 
 def test_subprocess_redacts_and_times_out(apps):

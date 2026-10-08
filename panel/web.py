@@ -35,6 +35,10 @@ class PasswordChange(BaseModel):
     new_password: str = Field(min_length=1, max_length=256)
 
 
+class RemovalInput(BaseModel):
+    password: str = Field(min_length=1, max_length=256)
+
+
 class AccountInput(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     provider: str
@@ -133,6 +137,7 @@ def create_apps(config=None, runner=None):
     admin.state.store = public.state.store = store
     admin.state.manager = manager
     failures = {}
+    removal_failures = {}
 
     def security_headers(app):
         @app.middleware("http")
@@ -277,7 +282,18 @@ def create_apps(config=None, runner=None):
     def edit_account(account_id: str, payload: AccountInput):
         return save_account(payload, account_id)
 
-    @admin.delete("/api/accounts/{account_id}", dependencies=[Depends(session)])
+    async def confirm_removal(payload: RemovalInput, request: Request, current=Depends(session)):
+        ip = request.client.host if request.client else "unknown"
+        recent = [t for t in removal_failures.get(ip, []) if t > time.monotonic() - 300]
+        if len(recent) >= 10:
+            raise HTTPException(429, "密码确认尝试次数过多，请 5 分钟后重试")
+        recent.append(time.monotonic())
+        removal_failures[ip] = recent
+        if not await run_blocking(check_password, payload.password, store.setting("password")):
+            raise HTTPException(403, "管理员密码不正确，未执行移除")
+        removal_failures.pop(ip, None)
+
+    @admin.delete("/api/accounts/{account_id}", dependencies=[Depends(confirm_removal)])
     def delete_account(account_id: str):
         get_account(account_id)
         if store.one("SELECT 1 FROM domains WHERE account_id=?", (account_id,)):
@@ -301,6 +317,8 @@ def create_apps(config=None, runner=None):
 
     @admin.post("/api/domains", dependencies=[Depends(session)])
     def add_domain(payload: DomainInput):
+        if not store.setting("email").strip():
+            raise HTTPException(400, "未填写 ACME 联系邮箱，无法添加证书。请先在「服务设置」中填写并保存")
         if payload.server == "letsencrypt_test":
             raise HTTPException(400, "新域名请使用正式 CA；测试地址可通过「其他」自行填写")
         account = store.one("SELECT * FROM accounts WHERE id=?", (payload.account_id,))
@@ -335,7 +353,7 @@ def create_apps(config=None, runner=None):
         store.execute("UPDATE domains SET dns_sleep=?, auto_renew=? WHERE id=?", (payload.dns_sleep, payload.auto_renew, domain_id))
         return {"ok": True}
 
-    @admin.delete("/api/domains/{domain_id}", dependencies=[Depends(session)])
+    @admin.delete("/api/domains/{domain_id}", dependencies=[Depends(confirm_removal)])
     def delete_domain(domain_id: str):
         get_domain(domain_id)
         busy(domain_id=domain_id)

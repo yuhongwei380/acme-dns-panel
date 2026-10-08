@@ -56,6 +56,7 @@ def authenticate(client, password="admin"):
 
 
 def account_and_domain(client, wildcard=True):
+    assert client.put("/api/settings", json={"email": "user@example.com"}).status_code == 200
     account = client.post("/api/accounts", json={"name": "Cloudflare Production", "provider": "cf", "credentials": {"CF_Token": "super-private-token"}})
     assert account.status_code == 200, account.text
     domain = client.post("/api/domains", json={"name": "Example.COM", "account_id": account.json()["id"], "wildcard": wildcard})
@@ -88,6 +89,62 @@ def test_login_rate_limit(apps):
     assert client.post("/api/login", json={"password": "admin"}, headers={"X-Panel-Request": "1"}).status_code == 429
 
 
+@pytest.mark.parametrize("resource", ["domains", "accounts"])
+def test_removal_requires_password_and_preserves_data_on_failure(apps, resource):
+    admin, public, store, root = apps
+    authenticate(admin)
+    account_id, domain_id = account_and_domain(admin)
+    if resource == "accounts":
+        response = admin.post("/api/accounts", json={"name": "Unused", "provider": "cf", "credentials": {"CF_Token": "unused-token"}})
+        target_id = response.json()["id"]
+        credential_file = root / "accounts" / target_id / "credentials.json"
+    else:
+        target_id = domain_id
+        make_certificate(root)
+        mark_issued(store, root)
+    endpoint = "/api/" + resource + "/" + target_id
+    assert admin.delete(endpoint).status_code == 422
+    assert admin.request("DELETE", endpoint, json={"password": ""}).status_code == 422
+    response = admin.request("DELETE", endpoint, json={"password": "wrong-password"})
+    assert response.status_code == 403 and "wrong-password" not in response.text
+    assert admin.get("/api/session").status_code == 200
+    assert store.one("SELECT id FROM " + resource + " WHERE id=?", (target_id,))
+    if resource == "accounts":
+        assert credential_file.exists()
+    else:
+        assert public.get("/example.com/fullchain.pem").status_code == 200
+    assert admin.request("DELETE", endpoint, json={"password": "admin"}, headers={"X-CSRF-Token": "bad"}).status_code == 403
+    assert admin.request("DELETE", endpoint, json={"password": "admin"}).status_code == 200
+    assert not store.one("SELECT id FROM " + resource + " WHERE id=?", (target_id,))
+    if resource == "accounts":
+        assert not credential_file.exists()
+    else:
+        assert public.get("/example.com/fullchain.pem").status_code == 404
+        assert (root / "ssl-renew/example.com/fullchain.pem").exists()
+
+
+def test_removal_password_attempts_are_limited_across_resources(apps):
+    admin, public, store, root = apps
+    authenticate(admin)
+    account_id, domain_id = account_and_domain(admin)
+    for attempt in range(10):
+        endpoint = "/api/domains/" + domain_id if attempt % 2 else "/api/accounts/" + account_id
+        assert admin.request("DELETE", endpoint, json={"password": "wrong"}).status_code == 403
+    assert admin.request("DELETE", "/api/domains/" + domain_id, json={"password": "admin"}).status_code == 429
+    assert store.one("SELECT id FROM domains WHERE id=?", (domain_id,))
+
+
+def test_removal_checks_current_password_after_password_change(apps):
+    admin, public, store, root = apps
+    authenticate(admin)
+    _, domain_id = account_and_domain(admin)
+    assert admin.post("/api/password", json={"current_password": "admin", "new_password": "new-password"}).status_code == 200
+    authenticate(admin, "new-password")
+    endpoint = "/api/domains/" + domain_id
+    assert admin.request("DELETE", endpoint, json={"password": "admin"}).status_code == 403
+    assert admin.request("DELETE", endpoint, json={"password": "new-password"}).status_code == 200
+
+
 def test_credentials_isolation_update_and_in_use(apps):
     admin, public, store, root = apps
     authenticate(admin)
@@ -100,7 +157,7 @@ def test_credentials_isolation_update_and_in_use(apps):
     assert store.credentials(account_id)["CF_Token"] == "super-private-token"
     assert admin.put("/api/accounts/" + account_id, json={"name": "Changed", "provider": "cf", "credentials": {"CF_Token": "replacement"}}).status_code == 200
     assert store.credentials(account_id)["CF_Token"] == "replacement"
-    assert admin.delete("/api/accounts/" + account_id).status_code == 409
+    assert admin.request("DELETE", "/api/accounts/" + account_id, json={"password": "admin"}).status_code == 409
     assert admin.post("/api/accounts", json={"name": "bad", "provider": "ali", "credentials": {"PATH": "/evil"}}).status_code == 400
     assert admin.post("/api/accounts", json={"name": "bad", "provider": "ali", "credentials": {"Ali_Key": "missing-secret"}}).status_code == 400
 
@@ -125,9 +182,30 @@ def test_domain_settings_and_validation(apps):
     assert admin.post("/api/domains/" + domain_id + "/jobs", json={"action": "issue"}).status_code == 400
 
 
+@pytest.mark.parametrize("email", [None, "", "   "])
+def test_add_domain_requires_saved_acme_email(apps, email):
+    admin, public, store, root = apps
+    authenticate(admin)
+    account = admin.post("/api/accounts", json={"name": "Cloudflare", "provider": "cf", "credentials": {"CF_Token": "test-token"}})
+    assert account.status_code == 200
+    if email is not None:
+        store.set_setting("email", email)
+    payload = {"name": "example.com", "account_id": account.json()["id"]}
+    response = admin.post("/api/domains", json=payload)
+    assert response.status_code == 400
+    assert "ACME 联系邮箱" in response.json()["detail"]
+    assert "服务设置" in response.json()["detail"]
+    assert not store.rows("SELECT * FROM domains")
+    assert not store.rows("SELECT * FROM jobs")
+    assert admin.put("/api/settings", json={"email": "user@example.com"}).status_code == 200
+    assert admin.post("/api/domains", json=payload).status_code == 200
+    assert not store.rows("SELECT * FROM jobs")
+
+
 def test_domain_requires_existing_complete_dns_account(apps):
     admin, public, store, root = apps
     authenticate(admin)
+    assert admin.put("/api/settings", json={"email": "user@example.com"}).status_code == 200
     response = admin.post("/api/domains", json={"name":"example.com", "account_id":"missing-account"})
     assert response.status_code == 400
     assert "未检测到" in response.json()["detail"]
@@ -168,7 +246,7 @@ def test_public_only_exposes_certificates_and_revokes_deleted_domain(apps):
     assert public.get("/accounts/credentials.json").status_code == 404
     assert public.get("/%2e%2e/data/panel.db").status_code == 404
     assert public.get("/assets/public.js").status_code == 200
-    assert admin.delete("/api/domains/" + domain_id).status_code == 200
+    assert admin.request("DELETE", "/api/domains/" + domain_id, json={"password": "admin"}).status_code == 200
     assert public.get("/example.com/privkey.pem").status_code == 404
     assert (root / "ssl-renew/example.com/privkey.pem").exists()
     # Re-adding the same name does not expose old files or reuse the removed order.
@@ -196,7 +274,7 @@ def test_jobs_queue_and_daily_scheduling(apps):
     job_id = manager.enqueue(domain, "issue")
     with pytest.raises(ValueError):
         manager.enqueue(domain, "renew")
-    assert admin.delete("/api/domains/" + domain_id).status_code == 409
+    assert admin.request("DELETE", "/api/domains/" + domain_id, json={"password": "admin"}).status_code == 409
     assert admin.put("/api/accounts/" + account_id, json={"name": "Changed", "provider": "cf", "credentials": {}}).status_code == 409
     store.execute("UPDATE jobs SET status='success' WHERE id=?", (job_id,))
     manager.schedule_due()

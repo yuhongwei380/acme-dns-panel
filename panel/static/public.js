@@ -1,6 +1,9 @@
 'use strict';
 let libraryData = {domains:[]};
 function renderLibrary() {
+  const script = $('#client-script');
+  script.hidden = !libraryData.script?.available;
+  script.innerHTML = script.hidden ? '' : `<div class="script-download-heading"><div><h3>客户端证书替换脚本</h3><p class="field-help mono">ssl-renew.sh</p></div><div class="actions"><button data-copy="${esc(location.origin + '/ssl-renew.sh')}">复制链接</button><a class="download-button" href="/ssl-renew.sh" download="ssl-renew.sh">下载脚本</a></div></div>`;
   const query = $('#search').value.trim().toLowerCase();
   const domains = libraryData.domains.filter(d => d.name.includes(query));
   const base = location.origin;
@@ -19,7 +22,7 @@ async function refreshLibrary() {
     if (!response.ok) throw new Error('无法读取证书，请稍后重试');
     libraryData = await response.json(); renderLibrary();
     $('#updated').textContent = '更新于 ' + new Date().toLocaleTimeString('zh-CN', {hour12:false});
-  } catch (error) { $('#library').innerHTML = `<div class="panel empty"><h3>读取失败</h3><p>${esc(error.message)}</p></div>`; }
+  } catch (error) { $('#client-script').hidden = true; $('#library').innerHTML = `<div class="panel empty"><h3>读取失败</h3><p>${esc(error.message)}</p></div>`; }
   finally { $('#refresh').disabled = false; }
 }
 $('#search').addEventListener('input', renderLibrary);

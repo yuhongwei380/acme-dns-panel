@@ -30,6 +30,7 @@ function render() {
   if (tab === 'accounts') renderAccounts();
   if (tab === 'jobs') renderJobs();
   if (tab === 'settings') renderSettings();
+  if (tab === 'script') renderScript().catch(error=>toast(error.message));
 }
 function renderDomains() {
   const domains = state.domains.filter(d => d.name.includes(query.toLowerCase()));
@@ -59,6 +60,20 @@ function renderSettings() {
     } catch(error) {status.textContent=error.message; toast(error.message);} finally {button.disabled=false;}
   });
   $('#password-form').addEventListener('submit', async event => {event.preventDefault(); await submit(event.target, async () => { await api('/password','POST',Object.fromEntries(new FormData(event.target))); showLogin(); toast('密码已更新，请重新登录'); });});
+}
+async function renderScript() {
+  const script = await api('/client-script');
+  if (tab !== 'script') return;
+  const url = publicBase() + '/ssl-renew.sh';
+  $('#content').innerHTML = `<div class="heading"><div><div class="eyebrow">CLIENT SCRIPT</div><h1>客户端脚本</h1><p>直接粘贴脚本内容，下载文件名固定为 ssl-renew.sh。</p></div></div><form id="script-form" class="panel form-panel"><label for="script-content">脚本内容<textarea id="script-content" name="content" class="script-editor" maxlength="262144" spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off" placeholder="#!/bin/bash">${esc(script.content)}</textarea></label><p class="field-help">保存后在只读页面公开下载，无需登录。内容清空并保存后停止提供下载；文件使用 UTF-8 编码和 Linux 换行符。</p><div class="form-actions"><button type="submit" class="primary">保存脚本</button></div></form><div class="panel form-panel script-download" ${script.content.trim()?'':'hidden'}><h3>公开下载地址</h3><a class="mono path" href="${esc(url)}" download="ssl-renew.sh">${esc(url)}</a></div>`;
+  $('#script-form').addEventListener('submit',async event=>{
+    event.preventDefault();
+    await submit(event.target,async()=>{
+      await api('/client-script','PUT',{content:$('#script-content').value});
+      await renderScript();
+      toast('客户端脚本已保存');
+    });
+  });
 }
 function editor(title, body) { $('#editor-title').textContent = title; $('#editor-body').innerHTML = body; initEyes($('#editor-body')); enhanceSelects($('#editor-body')); $('#editor').showModal(); }
 async function submit(form, fn) {
@@ -180,4 +195,4 @@ $('#login-form').addEventListener('submit',async event=>{event.preventDefault();
 $('#logout').addEventListener('click',async()=>{try{await api('/logout','POST');showLogin();}catch(error){toast(error.message);}});
 async function boot(){try{await enter(await api('/session'));}catch{showLogin();}}
 boot();
-setInterval(async()=>{if(!csrf)return;try{await reload(tab!=='settings'&&!document.querySelector('dialog[open]')&&document.activeElement?.id!=='domain-search');await updateLog();}catch(error){if(csrf)toast(error.message);}},5000);
+setInterval(async()=>{if(!csrf)return;try{await reload(!['settings','script'].includes(tab)&&!document.querySelector('dialog[open]')&&document.activeElement?.id!=='domain-search');await updateLog();}catch(error){if(csrf)toast(error.message);}},5000);

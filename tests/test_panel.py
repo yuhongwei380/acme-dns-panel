@@ -399,6 +399,48 @@ def test_pages_and_cookie_security(apps):
     assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
 
 
+def test_client_script_admin_edit_and_public_download(apps):
+    admin, public, store, root = apps
+    assert admin.get("/api/client-script").status_code == 401
+    assert admin.put("/api/client-script", json={"content": "#!/bin/bash"}, headers={"X-Panel-Request": "1"}).status_code == 401
+    assert public.get("/ssl-renew.sh").status_code == 404
+    assert public.get("/api/certificates").json()["script"]["available"] is False
+    authenticate(admin)
+    assert admin.get("/api/client-script").json() == {"filename": "ssl-renew.sh", "content": ""}
+    content = '#!/bin/bash\r\n# 证书替换\r\necho "${DOMAIN}"\r\n'
+    payload = {"content": content}
+    assert admin.put("/api/client-script", json=payload, headers={"X-CSRF-Token": "bad"}).status_code == 403
+    assert admin.put("/api/client-script", json=payload).status_code == 200
+    expected = content.replace("\r\n", "\n")
+    assert admin.get("/api/client-script").json()["content"] == expected
+    response = public.get("/ssl-renew.sh")
+    assert response.status_code == 200
+    assert response.content == expected.encode("utf-8")
+    assert response.headers["content-disposition"] == 'attachment; filename="ssl-renew.sh"'
+    assert response.headers["content-type"] == "application/octet-stream"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert public.get("/api/certificates").json()["script"] == {"filename": "ssl-renew.sh", "available": True}
+    assert expected not in public.get("/api/certificates").text
+    _, restarted_public = create_apps(Config(root))
+    assert restarted_public.state.store.setting("client_script") == expected
+    assert TestClient(restarted_public).get("/ssl-renew.sh").content == response.content
+    assert public.put("/api/client-script", json=payload, headers={"X-Panel-Request": "1"}).status_code == 405
+    assert public.get("/ssl-renew.py").status_code == 404
+    assert admin.put("/api/client-script", json={"content": ""}).status_code == 200
+    assert public.get("/ssl-renew.sh").status_code == 404
+    assert public.get("/api/certificates").json()["script"]["available"] is False
+
+
+@pytest.mark.parametrize("content", ["echo hi\x00", "x" * 262145, "中" * 90000],
+                         ids=["nul", "ascii_too_large", "utf8_too_large"])
+def test_client_script_rejects_invalid_content_without_overwriting(apps, content):
+    admin, public, store, root = apps
+    authenticate(admin)
+    assert admin.put("/api/client-script", json={"content": "#!/bin/bash\necho ok\n"}).status_code == 200
+    assert admin.put("/api/client-script", json={"content": content}).status_code == 422
+    assert public.get("/ssl-renew.sh").text == "#!/bin/bash\necho ok\n"
+
+
 def test_worker_enforces_total_job_deadline(apps):
     admin, public, store, root = apps
     authenticate(admin)

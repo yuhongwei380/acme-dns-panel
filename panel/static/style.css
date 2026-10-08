@@ -14,3 +14,5 @@
 .required-marker{color:var(--danger);font-weight:700}
 
 .provider-guide{line-height:1.8}.provider-guide p+p{margin-top:6px}.credential-field>.field-help{margin:-8px 0 18px}
+
+.script-editor{min-height:360px;font:13px/1.8 var(--mono);tab-size:4}.script-download{margin-top:24px}.script-download-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}.download-button{display:inline-flex;align-items:center;min-height:44px;padding:8px 16px;border-radius:10px;background:var(--accent);color:var(--sheet);font-weight:600}.download-button:hover{background:var(--accent-hover);text-decoration:none}

@@ -12,7 +12,7 @@ from typing import Dict
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Request, Depends
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
@@ -118,6 +118,18 @@ class SettingsInput(BaseModel):
 
 class PublicPortInput(BaseModel):
     public_port: int = Field(ge=1, le=65535, strict=True)
+
+
+class ClientScriptInput(BaseModel):
+    content: str = Field(max_length=262144)
+
+    @field_validator("content")
+    @classmethod
+    def valid_content(cls, value):
+        value = value.replace("\r\n", "\n").replace("\r", "\n")
+        if "\x00" in value or len(value.encode("utf-8")) > 262144:
+            raise ValueError("脚本不能包含空字符，且大小不能超过 256 KiB")
+        return value
 
 
 def create_apps(config=None, runner=None):
@@ -397,6 +409,23 @@ def create_apps(config=None, runner=None):
         store.set_setting("email", payload.email)
         return {"ok": True}
 
+    @admin.get("/api/client-script", dependencies=[Depends(session)])
+    def client_script():
+        return {"filename": "ssl-renew.sh", "content": store.setting("client_script")}
+
+    @admin.put("/api/client-script", dependencies=[Depends(session)])
+    def save_client_script(payload: ClientScriptInput):
+        store.set_setting("client_script", payload.content)
+        return {"ok": True}
+
+    @public.get("/ssl-renew.sh")
+    def download_client_script():
+        content = store.setting("client_script")
+        if not content.strip():
+            raise HTTPException(404, "管理员尚未提供客户端脚本")
+        return Response(content.encode("utf-8"), media_type="application/octet-stream",
+                        headers={"Content-Disposition": 'attachment; filename="ssl-renew.sh"'})
+
     @admin.post("/api/public-service/reload", dependencies=[Depends(session)])
     async def reload_public_service(payload: PublicPortInput):
         if payload.public_port == config.admin_port:
@@ -414,7 +443,8 @@ def create_apps(config=None, runner=None):
 
     @public.get("/api/certificates")
     def public_certificates():
-        return {"domains": [
+        return {"script": {"filename": "ssl-renew.sh", "available": bool(store.setting("client_script").strip())},
+                "domains": [
             {"name": d["name"], "wildcard": bool(d["wildcard"]), "staging": d["server"] in {
                 "letsencrypt_test", "https://acme-staging-v02.api.letsencrypt.org/directory"},
              "certificate": managed_certificate(config.root, d)}

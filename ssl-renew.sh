@@ -13,11 +13,11 @@
 # ============================================================
 
 # ---------------------- 需要你填写的配置 ----------------------
-# 域名（替换成你自己的真实域名，示例为 vesoft-inc.com）
-DOMAIN="vesoft-inc.com"
+# 域名（替换成你自己的真实域名，示例为 example.com）
+DOMAIN="example.com"
 
-# 证书所在目录（privkey.pem 和 fullchain.pem 所在的目录）
-CERT_DIR="/home/vesoft/ssl/${DOMAIN}"
+# 证书所在目录（privkey.pem 和 fullchain.pem 所在的目录，示例为example目录）
+CERT_DIR="/home/example/ssl/${DOMAIN}"
 
 # 提前多少天续期（N-1 天替换。举例：希望提前 5 天，则填 5）
 RENEW_BEFORE_DAYS=5

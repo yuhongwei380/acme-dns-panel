@@ -33,6 +33,6 @@ function secretField(id, label, required = true, autocomplete = 'off', placehold
   return `<label for="${esc(id)}">${esc(label)}<div class="password-wrap"><input id="${esc(id)}" name="${esc(id)}" type="password" autocomplete="${autocomplete}" ${required ? 'required' : ''} placeholder="${esc(placeholder)}"><button type="button" class="eye" data-eye="${esc(id)}" aria-label="显示密码" aria-pressed="false"></button></div></label>`;
 }
 function downloadUrl(base, domain, file) { return `${base.replace(/\/$/, '')}/${encodeURIComponent(domain)}/${file}`; }
-function wgetCommand(base, domain) { return ['fullchain.pem','privkey.pem'].map(file => `wget '${downloadUrl(base, domain, file).replace(/'/g, "'\\''")}'`).join('\n'); }
+function wgetCommand(base, domain, files = ['fullchain.pem','privkey.pem']) { return files.map(file => `wget '${downloadUrl(base, domain, file).replace(/'/g, "'\\''")}'`).join('\n'); }
 initEyes();
 

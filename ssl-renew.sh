@@ -2,18 +2,19 @@
 # ============================================================
 # SSL 证书自动续期脚本（兼容 RSA / ECC）
 # 功能：每天检查证书到期时间
-#   - 剩余天数 <= RENEW_BEFORE_DAYS：执行替换
-#   - 已到期（剩余天数 < 0）：立即执行替换
+#   - 剩余天数 < 0：已过期，立即执行替换
+#   - 0 <= 剩余天数 <= RENEW_BEFORE_DAYS：即将到期，执行替换
 #   - 否则跳过
+# 备份：每次替换前备份旧证书，最多保留最近 2 个
 # 用法：配置好下方变量后，加入 crontab 每天执行一次
 # ============================================================
 
 # ---------------------- 需要你填写的配置 ----------------------
-# 域名（替换成你自己的真实域名，示例为 yueshu-inc.cn）
-DOMAIN="yueshu-inc.cn"
+# 域名（替换成你自己的真实域名，示例为 vesoft-inc.com）
+DOMAIN="vesoft-inc.com"
 
 # 证书所在目录（privkey.pem 和 fullchain.pem 所在的目录）
-CERT_DIR="/home/vesoft/ssl-renewal/${DOMAIN}"
+CERT_DIR="/home/vesoft/ssl/${DOMAIN}"
 
 # 提前多少天续期（N-1 天替换。举例：希望提前 5 天，则填 5）
 RENEW_BEFORE_DAYS=5
@@ -22,15 +23,23 @@ RENEW_BEFORE_DAYS=5
 FULLCHAIN_URL="http://192.168.8.24:8081/${DOMAIN}/fullchain.pem"
 PRIVKEY_URL="http://192.168.8.24:8081/${DOMAIN}/privkey.pem"
 
-# nginx reload 命令
-NGINX_RELOAD_CMD="sudo nginx -s reload"
+# nginx reload 命令（写全路径更稳妥，避免 cron PATH 不全）
+# 若用 root 跑，建议去掉 sudo：NGINX_RELOAD_CMD="/usr/sbin/nginx -s reload"
+NGINX_RELOAD_CMD="sudo /usr/sbin/nginx -s reload"
 
-# 日志文件
-LOG_FILE="/var/log/ssl-renew-${DOMAIN}.log"
+# 日志目录（用户可写路径，避免 /var/log 权限问题）
+LOG_DIR="/home/vesoft/ssl/logs"
+LOG_FILE="${LOG_DIR}/ssl-renew-${DOMAIN}.log"
+
+# 备份保留数量（最多保留最近 N 个）
+BACKUP_KEEP=2
 # --------------------------------------------------------------
 
 CERT_FILE="${CERT_DIR}/fullchain.pem"
 KEY_FILE="${CERT_DIR}/privkey.pem"
+
+# 确保日志目录存在
+mkdir -p "$LOG_DIR" 2>/dev/null
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"
@@ -64,14 +73,8 @@ else
     exit 0
 fi
 
-# ---------- 下载新证书 ----------
+# ---------- 下载新证书（先下到临时文件） ----------
 log "开始下载新证书..."
-backup_dir="${CERT_DIR}/backup_$(date +%Y%m%d%H%M%S)"
-mkdir -p "$backup_dir"
-cp -a "$CERT_FILE" "$backup_dir/" 2>/dev/null
-cp -a "$KEY_FILE"  "$backup_dir/" 2>/dev/null
-log "旧证书已备份到: $backup_dir"
-
 tmp_fullchain="$(mktemp)"
 tmp_privkey="$(mktemp)"
 
@@ -110,7 +113,19 @@ if [ "$cert_pub" != "$key_pub" ]; then
     exit 1
 fi
 
-log "证书与私钥校验通过（类型: $(openssl x509 -in "$tmp_fullchain" -noout -text 2>/dev/null | grep -m1 'Public Key Algorithm' | awk -F: '{print $2}' | xargs)）。"
+key_algo=$(openssl x509 -in "$tmp_fullchain" -noout -text 2>/dev/null | grep -m1 'Public Key Algorithm' | awk -F: '{print $2}' | xargs)
+log "证书与私钥校验通过（密钥类型: ${key_algo:-unknown}）。"
+
+# ---------- 备份旧证书 ----------
+backup_dir="${CERT_DIR}/backup_$(date +%Y%m%d%H%M%S)"
+mkdir -p "$backup_dir"
+cp -a "$CERT_FILE" "$backup_dir/" 2>/dev/null
+cp -a "$KEY_FILE"  "$backup_dir/" 2>/dev/null
+log "旧证书已备份到: $backup_dir"
+
+# 只保留最近 N 个备份，删除更早的
+ls -1dt "${CERT_DIR}"/backup_* 2>/dev/null | tail -n +$((BACKUP_KEEP + 1)) | xargs -r rm -rf
+log "已清理旧备份，仅保留最近 ${BACKUP_KEEP} 个。"
 
 # ---------- 替换证书 ----------
 mv "$tmp_fullchain" "$CERT_FILE"

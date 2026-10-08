@@ -1,3 +1,3 @@
 """A small, self-hosted acme.sh control panel."""
 
-__version__ = "26.10.3"
+__version__ = "26.10.4"

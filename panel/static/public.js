@@ -3,7 +3,7 @@ let libraryData = {domains:[]};
 function renderLibrary() {
   const script = $('#client-script');
   script.hidden = !libraryData.script?.available;
-  script.innerHTML = script.hidden ? '' : `<div class="script-download-heading"><div><h3>客户端证书替换脚本</h3><p class="field-help mono">ssl-renew.sh</p></div><div class="actions"><button data-copy="${esc(location.origin + '/ssl-renew.sh')}">复制链接</button><a class="download-button" href="/ssl-renew.sh" download="ssl-renew.sh">下载脚本</a></div></div>`;
+  script.innerHTML = script.hidden ? '' : `<h3>客户端证书替换脚本</h3><p class="field-help">${libraryData.script.adaptable ? '从对应证书卡片下载 ssl-renew.sh，脚本会自动填入该域名和当前证书下载地址。' : '脚本模板缺少域名或证书下载地址配置，请联系管理员补充 example.com 示例配置。'}</p>`;
   const query = $('#search').value.trim().toLowerCase();
   const domains = libraryData.domains.filter(d => d.name.includes(query));
   const base = location.origin;
@@ -12,7 +12,7 @@ function renderLibrary() {
   }
   $('#library').innerHTML = `<div class="grid">${domains.map(d => {
     const c = d.certificate;
-    return `<article class="panel certificate-card"><header><h2 class="domain-title">${esc(d.name)}</h2>${badge(c.status)}</header><p class="coverage mono">${esc((c.sans.length ? c.sans : [d.name,...(d.wildcard ? ['*.' + d.name] : [])]).join(' · '))}</p>${d.staging ? '<span class="badge warn">测试 CA · 非受信任证书</span>' : ''}<div class="expiry"><span class="muted">到期日期</span><span class="mono">${dateText(c.expires)}${c.days_left !== null ? ` · ${c.days_left < 0 ? '已过期' : c.days_left + ' 天'}` : ''}</span></div>${c.available ? ['fullchain.pem','privkey.pem'].map(file => `<div class="download-row"><span class="mono small">${file}</span><div class="actions"><button data-copy="${esc(downloadUrl(base,d.name,file))}">复制链接</button><a href="${esc(downloadUrl(base,d.name,file))}" download>下载</a></div></div>`).join('') + `<button class="copy-command" data-wget="${esc(d.name)}">复制 wget 下载命令</button>` : '<p class="muted small">证书尚不可下载，请联系管理员。</p>'}</article>`;
+    return `<article class="panel certificate-card"><header><h2 class="domain-title">${esc(d.name)}</h2>${badge(c.status)}</header><p class="coverage mono">${esc((c.sans.length ? c.sans : [d.name,...(d.wildcard ? ['*.' + d.name] : [])]).join(' · '))}</p>${d.staging ? '<span class="badge warn">测试 CA · 非受信任证书</span>' : ''}<div class="expiry"><span class="muted">到期日期</span><span class="mono">${dateText(c.expires)}${c.days_left !== null ? ` · ${c.days_left < 0 ? '已过期' : c.days_left + ' 天'}` : ''}</span></div>${c.available ? ['fullchain.pem','privkey.pem'].map(file => `<div class="download-row"><span class="mono small">${file}</span><div class="actions"><button data-copy="${esc(downloadUrl(base,d.name,file))}">复制链接</button><a href="${esc(downloadUrl(base,d.name,file))}" download>下载</a></div></div>`).join('') + `<button class="copy-command" data-wget="${esc(d.name)}">复制 wget 下载命令</button>` + (libraryData.script?.adaptable ? `<div class="download-row"><span class="mono small">ssl-renew.sh</span><div class="actions"><button data-copy="${esc(downloadUrl(base,d.name,'ssl-renew.sh'))}">复制脚本链接</button><a class="download-button" href="${esc(downloadUrl(base,d.name,'ssl-renew.sh'))}" download="ssl-renew.sh">下载脚本</a></div></div>` : '') : '<p class="muted small">证书尚不可下载，请联系管理员。</p>'}</article>`;
   }).join('')}</div>`;
 }
 async function refreshLibrary() {

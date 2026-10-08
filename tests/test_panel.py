@@ -403,31 +403,36 @@ def test_client_script_admin_edit_and_public_download(apps):
     admin, public, store, root = apps
     assert admin.get("/api/client-script").status_code == 401
     assert admin.put("/api/client-script", json={"content": "#!/bin/bash"}, headers={"X-Panel-Request": "1"}).status_code == 401
-    assert public.get("/ssl-renew.sh").status_code == 404
+    assert public.get("/ssl-renew.sh").status_code == 400
     assert public.get("/api/certificates").json()["script"]["available"] is False
     authenticate(admin)
-    assert admin.get("/api/client-script").json() == {"filename": "ssl-renew.sh", "content": ""}
-    content = '#!/bin/bash\r\n# 证书替换\r\necho "${DOMAIN}"\r\n'
+    account_and_domain(admin)
+    make_certificate(root)
+    mark_issued(store, root)
+    assert admin.get("/api/client-script").json() == {"filename": "ssl-renew.sh", "content": "", "adaptable": False}
+    content = '#!/bin/bash\r\n# 证书替换\r\nDOMAIN="{{DOMAIN}}"\r\nFULLCHAIN_URL="{{FULLCHAIN_URL}}"\r\nPRIVKEY_URL="{{PRIVKEY_URL}}"\r\n'
     payload = {"content": content}
     assert admin.put("/api/client-script", json=payload, headers={"X-CSRF-Token": "bad"}).status_code == 403
     assert admin.put("/api/client-script", json=payload).status_code == 200
     expected = content.replace("\r\n", "\n")
     assert admin.get("/api/client-script").json()["content"] == expected
-    response = public.get("/ssl-renew.sh")
+    response = public.get("/example.com/ssl-renew.sh")
     assert response.status_code == 200
-    assert response.content == expected.encode("utf-8")
+    rendered = '#!/bin/bash\n# 证书替换\nDOMAIN="example.com"\nFULLCHAIN_URL="http://testserver/example.com/fullchain.pem"\nPRIVKEY_URL="http://testserver/example.com/privkey.pem"\n'
+    assert response.content == rendered.encode("utf-8")
+    assert public.get("/ssl-renew.sh?domain=example.com").content == response.content
     assert response.headers["content-disposition"] == 'attachment; filename="ssl-renew.sh"'
     assert response.headers["content-type"] == "application/octet-stream"
     assert response.headers["x-content-type-options"] == "nosniff"
-    assert public.get("/api/certificates").json()["script"] == {"filename": "ssl-renew.sh", "available": True}
+    assert public.get("/api/certificates").json()["script"] == {"filename": "ssl-renew.sh", "available": True, "adaptable": True}
     assert expected not in public.get("/api/certificates").text
     _, restarted_public = create_apps(Config(root))
     assert restarted_public.state.store.setting("client_script") == expected
-    assert TestClient(restarted_public).get("/ssl-renew.sh").content == response.content
+    assert TestClient(restarted_public).get("/example.com/ssl-renew.sh").content == response.content
     assert public.put("/api/client-script", json=payload, headers={"X-Panel-Request": "1"}).status_code == 405
     assert public.get("/ssl-renew.py").status_code == 404
     assert admin.put("/api/client-script", json={"content": ""}).status_code == 200
-    assert public.get("/ssl-renew.sh").status_code == 404
+    assert public.get("/example.com/ssl-renew.sh").status_code == 404
     assert public.get("/api/certificates").json()["script"]["available"] is False
 
 
@@ -438,7 +443,33 @@ def test_client_script_rejects_invalid_content_without_overwriting(apps, content
     authenticate(admin)
     assert admin.put("/api/client-script", json={"content": "#!/bin/bash\necho ok\n"}).status_code == 200
     assert admin.put("/api/client-script", json={"content": content}).status_code == 422
-    assert public.get("/ssl-renew.sh").text == "#!/bin/bash\necho ok\n"
+    assert store.setting("client_script") == "#!/bin/bash\necho ok\n"
+
+
+def test_client_script_matches_each_certificate_and_download_origin(apps):
+    admin, public, store, root = apps
+    authenticate(admin)
+    account_id, domain_id = account_and_domain(admin)
+    second = admin.post("/api/domains", json={"name": "second.example.org", "account_id": account_id})
+    assert second.status_code == 200
+    for name in ("example.com", "second.example.org"):
+        make_certificate(root, name)
+        mark_issued(store, root, name)
+    template = 'DOMAIN="example.com"\nFULLCHAIN_URL="old"\nPRIVKEY_URL="old"\nCERT_DIR="/ssl/example.com"\n'
+    assert admin.put("/api/client-script", json={"content": template}).status_code == 200
+    for name in ("example.com", "second.example.org"):
+        response = public.get("/" + name + "/ssl-renew.sh", headers={"Host": "192.168.8.24:8081"})
+        assert response.status_code == 200
+        assert 'DOMAIN="' + name + '"' in response.text
+        assert 'http://192.168.8.24:8081/' + name + '/fullchain.pem' in response.text
+        assert 'CERT_DIR="/ssl/' + name + '"' in response.text
+        changed_port = public.get("/" + name + "/ssl-renew.sh", headers={"Host": "certs.local:9001"})
+        assert 'http://certs.local:9001/' + name + '/privkey.pem' in changed_port.text
+    assert store.setting("client_script") == template
+    assert public.get("/missing.example.org/ssl-renew.sh").status_code == 404
+    assert public.get("/example.com/ssl-renew.sh", headers={"Host": "bad'host:8001"}).status_code == 400
+    assert admin.put("/api/client-script", json={"content": "echo hello"}).status_code == 200
+    assert public.get("/example.com/ssl-renew.sh").status_code == 409
 
 
 def test_worker_enforces_total_job_deadline(apps):

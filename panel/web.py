@@ -16,8 +16,10 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
+from . import __version__
 from .acme import JobManager
 from .certificates import managed_certificate, domain_issued
+from .client_scripts import adaptable, render_script
 from .config import Config
 from .compat import run_blocking
 from .providers import PROVIDERS, BY_ID
@@ -144,8 +146,8 @@ def create_apps(config=None, runner=None):
         yield
         await manager.stop()
 
-    admin = FastAPI(title="ACME DNS Panel", lifespan=lifecycle, docs_url=None, redoc_url=None, openapi_url=None)
-    public = FastAPI(title="Certificate Library", docs_url=None, redoc_url=None, openapi_url=None)
+    admin = FastAPI(title="ACME DNS Panel", version=__version__, lifespan=lifecycle, docs_url=None, redoc_url=None, openapi_url=None)
+    public = FastAPI(title="Certificate Library", version=__version__, docs_url=None, redoc_url=None, openapi_url=None)
     admin.state.store = public.state.store = store
     admin.state.manager = manager
     failures = {}
@@ -400,7 +402,7 @@ def create_apps(config=None, runner=None):
 
     @admin.get("/api/settings", dependencies=[Depends(session)])
     def settings():
-        return {"email": store.setting("email"),
+        return {"email": store.setting("email"), "version": __version__,
                 "root": str(config.root), "acme_installed": (config.root / "acme" / "acme.sh").is_file(),
                 "admin_port": config.admin_port, "public_port": config.public_port}
 
@@ -411,7 +413,8 @@ def create_apps(config=None, runner=None):
 
     @admin.get("/api/client-script", dependencies=[Depends(session)])
     def client_script():
-        return {"filename": "ssl-renew.sh", "content": store.setting("client_script")}
+        content = store.setting("client_script")
+        return {"filename": "ssl-renew.sh", "content": content, "adaptable": adaptable(content)}
 
     @admin.put("/api/client-script", dependencies=[Depends(session)])
     def save_client_script(payload: ClientScriptInput):
@@ -419,10 +422,34 @@ def create_apps(config=None, runner=None):
         return {"ok": True}
 
     @public.get("/ssl-renew.sh")
-    def download_client_script():
+    def download_client_script(request: Request, domain: str = None):
+        if not domain:
+            raise HTTPException(400, "请从对应证书卡片下载脚本，或在地址中指定 domain 参数")
+        return certificate_script(request, domain)
+
+    def certificate_script(request, domain):
+        row = store.one("SELECT * FROM domains WHERE name=?", (domain,))
+        if not row or not managed_certificate(config.root, row)["available"]:
+            raise HTTPException(404, "证书尚未签发或文件未通过校验")
         content = store.setting("client_script")
         if not content.strip():
             raise HTTPException(404, "管理员尚未提供客户端脚本")
+        # The browser's download origin reflects the current port and reverse proxy.
+        try:
+            url = urlsplit(str(request.base_url))
+            host_pattern = r"(?:[a-zA-Z0-9.-]+|\[[0-9a-fA-F:]+\])(?::[0-9]+)?"
+            valid = (url.scheme in {"http", "https"} and re.fullmatch(host_pattern, url.netloc)
+                     and re.fullmatch(host_pattern, request.headers.get("host", url.netloc)))
+            valid = valid and (url.port is None or 1 <= url.port <= 65535)
+            valid = valid and re.fullmatch(r"[a-zA-Z0-9/_.~-]*", url.path)
+        except ValueError:
+            valid = False
+        if not valid:
+            raise HTTPException(400, "下载地址格式不正确")
+        try:
+            content = render_script(content, row["name"], str(request.base_url).rstrip("/"))
+        except ValueError as error:
+            raise HTTPException(409, str(error))
         return Response(content.encode("utf-8"), media_type="application/octet-stream",
                         headers={"Content-Disposition": 'attachment; filename="ssl-renew.sh"'})
 
@@ -443,7 +470,8 @@ def create_apps(config=None, runner=None):
 
     @public.get("/api/certificates")
     def public_certificates():
-        return {"script": {"filename": "ssl-renew.sh", "available": bool(store.setting("client_script").strip())},
+        content = store.setting("client_script")
+        return {"script": {"filename": "ssl-renew.sh", "available": bool(content.strip()), "adaptable": adaptable(content)},
                 "domains": [
             {"name": d["name"], "wildcard": bool(d["wildcard"]), "staging": d["server"] in {
                 "letsencrypt_test", "https://acme-staging-v02.api.letsencrypt.org/directory"},
@@ -452,7 +480,9 @@ def create_apps(config=None, runner=None):
         ]}
 
     @public.get("/{domain}/{filename}")
-    def download(domain: str, filename: str):
+    def download(domain: str, filename: str, request: Request):
+        if filename == "ssl-renew.sh":
+            return certificate_script(request, domain)
         row = store.one("SELECT * FROM domains WHERE name=?", (domain,))
         if filename not in {"fullchain.pem", "privkey.pem"} or not row:
             raise HTTPException(404, "文件不存在")

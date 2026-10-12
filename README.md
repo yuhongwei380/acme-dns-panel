@@ -1,6 +1,6 @@
 # ACME DNS Panel
 
-当前面板版本：`26.10.4`。
+当前面板版本：`26.10.5`。
 
 轻量的 acme.sh 网页管理工具：DNS 账户、普通/通配证书、每日续期检查，以及局域网免认证证书下载页面。
 
@@ -85,6 +85,39 @@ wget "http://${SERVER_IP}:8001/example.com/privkey.pem"
 建议通用脚本使用 `example.com` 作为示例域名，证书下载地址使用 `http://示例主机:端口/example.com/fullchain.pem` 和 `privkey.pem`。下载时自动替换这些地址，以及脚本目录和日志路径中的 `example.com`。兼容脚本中的单行 `DOMAIN=...`、`FULLCHAIN_URL=...`、`PRIVKEY_URL=...` 配置，下载时自动替换其值；也支持 `{{DOMAIN}}`、`{{FULLCHAIN_URL}}`、`{{PRIVKEY_URL}}`、`{{DOWNLOAD_BASE}}` 占位符。客户端证书目录和日志路径应引用 `${DOMAIN}` 区分不同证书。脚本缺少域名或下载地址配置时，不提供适配后的下载；旧的 `/ssl-renew.sh` 地址必须显式携带 `?domain=<主域名>`。
 
 无需配置脚本变量表单；脚本不会在证书服务器上执行。内容保存在面板数据库中，限制为 256 KiB，下载使用 UTF-8 编码和 Linux 换行符。清空内容并保存可停止提供下载。
+
+### 快速部署
+
+管理页「快速部署」提供默认 nginx 反向代理模板，可从 `.conf` / `.txt` 文件导入、编辑并保存（最大 256 KiB）。模板必须使用 `{{SERVICE_DOMAIN}}`、`{{CERT_DIR}}`、`{{PROXY_PORT}}` 三个占位符；证书路径建议放在双引号内。`$host`、`$request_uri`、`$scheme` 等 nginx 变量保持原样。导入只检查占位符，实际 nginx 语法由目标服务器的 `nginx -t` 检查。默认模板启用 HTTP 跳转 HTTPS，代理到本机指定端口，HTTP/2 可按目标 nginx 版本自行添加。
+
+只读页「快速部署」选择可下载且未过期的证书，填写服务域名及反向代理端口，点击「生成部署命令」，分别复制两组命令到目标 Linux 服务器执行。服务域名必须匹配证书实际 SAN；通配符仅匹配一级子域名。测试 CA 证书会显示不受信任提示。面板仅生成命令，不连接或操作目标服务器。
+
+两组命令使用目标机当前用户的 `$HOME`，请以同一部署用户执行，不能将整组命令改为 `sudo bash` 后再混用普通用户。证书及续期脚本安装到 `~/ssl/<证书主域名>/`，日志写入 `~/ssl/logs/`。同一张证书供不同服务使用时共享一个续期任务。家目录包含空格、非 ASCII 字符或其他特殊字符时，命令会提示手动部署。
+
+证书部署要求 Bash、wget、OpenSSL、crontab、flock，以及可访问的证书下载地址；客户端脚本需要先在管理页配置，可使用仓库中的 `ssl-renew.sh`。除原有域名及下载地址配置外，快速部署要求包含 `CERT_DIR`、`LOG_DIR`、`LOG_FILE`、`NGINX_RELOAD_CMD` 单行配置。通过 `/<证书主域名>/ssl-renew.sh?deployment=1` 下载时，仅该版本会统一目录和重载命令，不修改保存的共享模板或原有普通下载。首次执行跳过 nginx 重载，成功后保留已有用户 crontab 并添加每天 03:00（目标服务器时区）执行的任务，重复执行会去重。同一用户的快速部署命令通过 flock 串行更新 cron。
+
+后续续期使用 `/usr/sbin/nginx -t` 和 `/usr/sbin/nginx -s reload`。root 可直接执行；普通用户需由服务器管理员配置这两个命令所需的无密码 sudo 权限，cron 不能交互输入密码。这里的客户端任务下载面板已签发的证书，证书签发与续期仍由面板完成。
+
+nginx 配置要求已安装并启动 nginx，且 `http` 块实际加载 `/etc/nginx/conf.d/*.conf`。配置命令先检查现有配置及证书文件，再写入 `/etc/nginx/conf.d/<服务域名>.conf`。已有配置会备份为 `.conf.bak.<时间>.<进程号>`；测试通过后重载，写入、测试或重载失败时恢复原配置，新文件则撤回。证书绝对路径在目标机执行时替换，其余 nginx 变量不会被 Shell 展开。需要 sudo 权限，并确保 nginx 主进程可以访问家目录内的证书及私钥。
+
+#### 反向代理路径与排错
+
+只读页可以放在 `/download/` 等子路径下。页面的静态资源、证书列表、快速部署 API 和下载链接均使用该前缀；nginx 应将整个前缀转发到下载服务，并删除前缀。例如下载端口为 8081：
+
+```nginx
+location = /download {
+    return 301 /download/$is_args$args;
+}
+location ^~ /download/ {
+    proxy_pass http://127.0.0.1:8081/;
+}
+```
+
+代理还需传递正确的 Host 与 X-Forwarded-Proto。不要将快速部署 API 转发到管理端口：它只在下载服务上提供。新页面会请求 `/download/api/quick-deploy`，生成脚本下载链接时通过受校验的 `public_path` 保留外部路径，脚本中的证书下载地址也保留前缀。直接访问下载端口根路径仍可使用。
+
+快速部署请求失败时，页面提供「查看错误详情」和「复制错误详情」，包含请求地址、HTTP 状态、请求编号和错误原因，浏览器控制台也输出相同信息。面板服务会为 HTTP 错误和成功生成命令的请求记录方法、路径、状态及请求编号，不记录请求正文、密码、DNS 凭据或私钥。使用 `sudo journalctl -u acme-dns-panel -n 100 --no-pager` 查看，或加 `-f` 实时跟踪；代理自身产生的错误需查看 nginx 的 access/error 日志。
+
+页面生成命令不在目标服务器执行，因此不会显示目标机运行日志。实际证书更新日志在目标机的 `~/ssl/logs/ssl-renew-<证书主域名>.log`，可用 `tail -f` 查看。
 
 ### DNS 服务商
 

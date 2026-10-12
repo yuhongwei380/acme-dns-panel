@@ -2,13 +2,14 @@ import asyncio
 import hashlib
 import hmac
 import ipaddress
+import logging
 import re
 import secrets
 import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Request, Depends
@@ -20,13 +21,14 @@ from . import __version__
 from .acme import JobManager
 from .certificates import managed_certificate, domain_issued
 from .client_scripts import adaptable, render_script
-from .deployment import DEFAULT_NGINX_TEMPLATE, validate_template, covers_domain, deployment_script, commands
+from .deployment import DEFAULT_NGINX_TEMPLATE, validate_template, covers_domain, deployment_script, commands, public_path
 from .config import Config
 from .compat import run_blocking
 from .providers import PROVIDERS, BY_ID
 from .store import Store, hash_password, check_password, now
 
 STATIC = Path(__file__).parent / "static"
+logger = logging.getLogger("uvicorn.error")
 
 
 class Login(BaseModel):
@@ -146,6 +148,12 @@ class DeploymentInput(BaseModel):
     certificate_domain: str
     service_domain: str
     proxy_port: int = Field(ge=1, le=65535, strict=True)
+    public_path: Optional[str] = Field(default=None, max_length=1024)
+
+    @field_validator("public_path")
+    @classmethod
+    def download_path(cls, value):
+        return public_path(value) if value is not None else None
 
     @field_validator("certificate_domain", "service_domain")
     @classmethod
@@ -175,10 +183,19 @@ def create_apps(config=None, runner=None):
     def security_headers(app):
         @app.middleware("http")
         async def headers(request, call_next):
+            request_id = secrets.token_hex(8)
             # Browser form submissions cannot supply this header; CORS is intentionally disabled.
             if request.method not in {"GET", "HEAD", "OPTIONS"} and request.headers.get("X-Panel-Request") != "1":
-                return JSONResponse({"detail": "请求来源校验失败"}, status_code=403)
-            response = await call_next(request)
+                response = JSONResponse({"detail": "请求来源校验失败"}, status_code=403)
+            else:
+                response = await call_next(request)
+            response.headers["X-Request-ID"] = request_id
+            if response.status_code >= 400:
+                logger.warning("%s HTTP %s %r status=%s request_id=%s", app.title,
+                               request.method, request.url.path, response.status_code, request_id)
+            elif request.url.path.endswith("/api/quick-deploy"):
+                logger.info("%s HTTP %s %r status=%s request_id=%s", app.title,
+                            request.method, request.url.path, response.status_code, request_id)
             response.headers["Cache-Control"] = "no-store"
             response.headers["X-Content-Type-Options"] = "nosniff"
             response.headers["Referrer-Policy"] = "no-referrer"
@@ -450,7 +467,7 @@ def create_apps(config=None, runner=None):
         store.set_setting("nginx_template", payload.content)
         return {"ok": True}
 
-    def download_base(request):
+    def download_base(request, prefix=None):
         try:
             url = urlsplit(str(request.base_url))
             host_pattern = r"(?:[a-zA-Z0-9.-]+|\[[0-9a-fA-F:]+\])(?::[0-9]+)?"
@@ -462,7 +479,11 @@ def create_apps(config=None, runner=None):
             valid = False
         if not valid:
             raise HTTPException(400, "下载地址格式不正确")
-        return str(request.base_url).rstrip("/")
+        try:
+            path = public_path(prefix if prefix is not None else (request.scope.get("root_path") or url.path))
+        except ValueError as error:
+            raise HTTPException(400, str(error))
+        return (url.scheme + "://" + url.netloc + path).rstrip("/")
 
     @public.post("/api/quick-deploy")
     def quick_deploy(payload: DeploymentInput, request: Request):
@@ -474,7 +495,7 @@ def create_apps(config=None, runner=None):
             raise HTTPException(409, "所选证书尚不可用或已过期")
         if not covers_domain(info["sans"], payload.service_domain):
             raise HTTPException(422, "所选证书未覆盖服务域名，请选择匹配的证书")
-        base = download_base(request)
+        base = download_base(request, payload.public_path)
         try:
             deployment_script(store.setting("client_script"), row["name"], base)
             return commands(row["name"], payload.service_domain, payload.proxy_port, base,
@@ -496,7 +517,7 @@ def create_apps(config=None, runner=None):
         if not content.strip():
             raise HTTPException(404, "管理员尚未提供客户端脚本")
         # The browser's download origin reflects the current port and reverse proxy.
-        base = download_base(request)
+        base = download_base(request, request.query_params.get("public_path"))
         try:
             renderer = deployment_script if request.query_params.get("deployment") == "1" else render_script
             content = renderer(content, row["name"], base)

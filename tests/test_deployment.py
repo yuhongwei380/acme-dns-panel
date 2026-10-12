@@ -1,12 +1,13 @@
 import os
 import shutil
 import subprocess
+import logging
 from pathlib import Path
 
 import pytest
 
 from panel.deployment import (DEFAULT_NGINX_TEMPLATE, commands, covers_domain,
-                              deployment_script, validate_template)
+                              deployment_script, validate_template, public_path)
 from test_panel import apps, authenticate, account_and_domain, make_certificate, mark_issued
 
 
@@ -183,3 +184,65 @@ def test_shipped_renewal_script_and_generated_commands_parse(tmp_path):
     for content in (script, *generated.values()):
         result = subprocess.run([bash_executable(), "-n"], input=content, text=True, capture_output=True)
         assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("prefix", ["https://other.org/", "//other.org/", "/../", "/download/../", "/download/$x/", "/download/%2f/"])
+def test_public_prefix_rejects_unsafe_paths(prefix):
+    with pytest.raises(ValueError):
+        public_path(prefix)
+
+
+def test_prefix_survives_reverse_proxy_stripping(apps):
+    admin, public, store, root = apps
+    authenticate(admin)
+    account_and_domain(admin)
+    make_certificate(root)
+    mark_issued(store, root)
+    store.set_setting("client_script", Path("ssl-renew.sh").read_text(encoding="utf-8"))
+    payload = {"certificate_domain": "example.com", "service_domain": "app.example.com",
+               "proxy_port": 8000, "public_path": "/download/"}
+    result = public.post("/api/quick-deploy", json=payload, headers={"X-Panel-Request": "1"})
+    assert result.status_code == 200, result.text
+    assert "http://testserver/download/example.com/ssl-renew.sh?deployment=1&public_path=%2Fdownload%2F" in result.json()["certificate_command"]
+    script = public.get("/example.com/ssl-renew.sh?deployment=1&public_path=%2Fdownload%2F")
+    assert script.status_code == 200
+    assert 'FULLCHAIN_URL="http://testserver/download/example.com/fullchain.pem"' in script.text
+    assert 'PRIVKEY_URL="http://testserver/download/example.com/privkey.pem"' in script.text
+    for prefix in ("//evil.org/", "/download/../"):
+        assert public.post("/api/quick-deploy", json={**payload, "public_path": prefix}, headers={"X-Panel-Request": "1"}).status_code == 422
+        assert public.get("/example.com/ssl-renew.sh", params={"public_path": prefix}).status_code == 400
+
+
+def test_error_requests_are_logged_without_credentials(apps, caplog):
+    admin, public, store, root = apps
+    with caplog.at_level(logging.WARNING, logger="uvicorn.error"):
+        response = admin.post("/api/quick-deploy", json={"password": "never-log-this"},
+                              headers={"X-Panel-Request": "1"})
+    assert response.status_code == 404
+    request_id = response.headers["X-Request-ID"]
+    assert request_id in caplog.text
+    assert "ACME DNS Panel HTTP POST '/api/quick-deploy' status=404" in caplog.text
+    assert "never-log-this" not in caplog.text
+
+
+def test_prefixed_public_mount_routes_generation(apps):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    admin, public, store, root = apps
+    authenticate(admin)
+    account_and_domain(admin)
+    make_certificate(root)
+    mark_issued(store, root)
+    store.set_setting("client_script", Path("ssl-renew.sh").read_text(encoding="utf-8"))
+    outer = FastAPI()
+    outer.mount("/download", public.app)
+    outer.mount("/", admin.app)
+    client = TestClient(outer)
+    headers = {"X-Panel-Request": "1"}
+    payload = {"certificate_domain": "example.com", "service_domain": "app.example.com", "proxy_port": 8000}
+    assert client.post("/api/quick-deploy", json=payload, headers=headers).status_code == 404
+    result = client.post("/download/api/quick-deploy", json=payload, headers=headers)
+    assert result.status_code == 200
+    assert "/download/example.com/ssl-renew.sh" in result.json()["certificate_command"]
+    assert client.get("/download/assets/public.js").status_code == 200
+    assert client.get("/download/api/certificates").status_code == 200

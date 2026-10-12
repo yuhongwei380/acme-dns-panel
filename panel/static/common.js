@@ -32,7 +32,12 @@ function badge(status) { const [label, tone] = statusMap[status] || [status,''];
 function secretField(id, label, required = true, autocomplete = 'off', placeholder = '') {
   return `<label for="${esc(id)}">${esc(label)}<div class="password-wrap"><input id="${esc(id)}" name="${esc(id)}" type="password" autocomplete="${autocomplete}" ${required ? 'required' : ''} placeholder="${esc(placeholder)}"><button type="button" class="eye" data-eye="${esc(id)}" aria-label="显示密码" aria-pressed="false"></button></div></label>`;
 }
-function downloadUrl(base, domain, file) { return `${base.replace(/\/$/, '')}/${encodeURIComponent(domain)}/${file}`; }
+function downloadUrl(base, domain, file) {
+  const url = new URL(`${base.replace(/\/$/, '')}/${encodeURIComponent(domain)}/${file}`);
+  const prefix = new URL(base).pathname;
+  if (file === 'ssl-renew.sh' && prefix !== '/') url.searchParams.set('public_path',prefix);
+  return url.href;
+}
 function wgetCommand(base, domain, files = ['fullchain.pem','privkey.pem']) { return files.map(file => `wget '${downloadUrl(base, domain, file).replace(/'/g, "'\\''")}'`).join('\n'); }
 initEyes();
 

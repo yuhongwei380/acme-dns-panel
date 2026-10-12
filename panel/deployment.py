@@ -3,6 +3,7 @@
 import hashlib
 import re
 import shlex
+from urllib.parse import urlencode, urlsplit
 
 from .client_scripts import assignment_pattern, render_script
 
@@ -39,6 +40,14 @@ server {
 """
 
 PLACEHOLDERS = {"SERVICE_DOMAIN", "CERT_DIR", "PROXY_PORT"}
+
+
+def public_path(value):
+    if (not isinstance(value, str) or len(value) > 1024
+            or not re.fullmatch(r"/[a-zA-Z0-9/_.~-]*", value)
+            or any(part in {".", ".."} for part in value.split("/")) or "//" in value):
+        raise ValueError("下载服务路径格式不正确")
+    return value.rstrip("/") + "/"
 
 
 def validate_template(content):
@@ -94,6 +103,9 @@ esac
 '''
     preamble += 'CERT_DIR="$HOME/ssl/' + domain + '"\n'
     url = base + "/" + domain + "/ssl-renew.sh?deployment=1"
+    prefix = urlsplit(base).path
+    if prefix and prefix != "/":
+        url += "&" + urlencode({"public_path": public_path(prefix)})
     certificate = preamble + '''for tool in wget openssl crontab flock; do
     command -v "$tool" >/dev/null || { echo "缺少依赖: $tool" >&2; exit 1; }
 done

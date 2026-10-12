@@ -100,6 +100,25 @@ wget "http://${SERVER_IP}:8001/example.com/privkey.pem"
 
 nginx 配置要求已安装并启动 nginx，且 `http` 块实际加载 `/etc/nginx/conf.d/*.conf`。配置命令先检查现有配置及证书文件，再写入 `/etc/nginx/conf.d/<服务域名>.conf`。已有配置会备份为 `.conf.bak.<时间>.<进程号>`；测试通过后重载，写入、测试或重载失败时恢复原配置，新文件则撤回。证书绝对路径在目标机执行时替换，其余 nginx 变量不会被 Shell 展开。需要 sudo 权限，并确保 nginx 主进程可以访问家目录内的证书及私钥。
 
+#### 反向代理路径与排错
+
+只读页可以放在 `/download/` 等子路径下。页面的静态资源、证书列表、快速部署 API 和下载链接均使用该前缀；nginx 应将整个前缀转发到下载服务，并删除前缀。例如下载端口为 8081：
+
+```nginx
+location = /download {
+    return 301 /download/$is_args$args;
+}
+location ^~ /download/ {
+    proxy_pass http://127.0.0.1:8081/;
+}
+```
+
+代理还需传递正确的 Host 与 X-Forwarded-Proto。不要将快速部署 API 转发到管理端口：它只在下载服务上提供。新页面会请求 `/download/api/quick-deploy`，生成脚本下载链接时通过受校验的 `public_path` 保留外部路径，脚本中的证书下载地址也保留前缀。直接访问下载端口根路径仍可使用。
+
+快速部署请求失败时，页面提供「查看错误详情」和「复制错误详情」，包含请求地址、HTTP 状态、请求编号和错误原因，浏览器控制台也输出相同信息。面板服务会为 HTTP 错误和成功生成命令的请求记录方法、路径、状态及请求编号，不记录请求正文、密码、DNS 凭据或私钥。使用 `sudo journalctl -u acme-dns-panel -n 100 --no-pager` 查看，或加 `-f` 实时跟踪；代理自身产生的错误需查看 nginx 的 access/error 日志。
+
+页面生成命令不在目标服务器执行，因此不会显示目标机运行日志。实际证书更新日志在目标机的 `~/ssl/logs/ssl-renew-<证书主域名>.log`，可用 `tail -f` 查看。
+
 ### DNS 服务商
 
 | 服务商 | acme.sh 插件 | 凭据环境变量 |

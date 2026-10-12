@@ -31,6 +31,29 @@ function render() {
   if (tab === 'jobs') renderJobs();
   if (tab === 'settings') renderSettings();
   if (tab === 'script') renderScript().catch(error=>toast(error.message));
+  if (tab === 'deployment') renderDeployment().catch(error=>toast(error.message));
+}
+
+async function renderDeployment() {
+  const template = await api('/nginx-template');
+  if (tab !== 'deployment') return;
+  $('#content').innerHTML = `<div class="heading"><div><div class="eyebrow">QUICK DEPLOYMENT</div><h1>快速部署</h1><p>导入 nginx 模板，用户在只读页生成并复制部署命令。</p></div></div><form id="nginx-template-form" class="panel form-panel"><label>导入 nginx 模板<input id="nginx-template-file" type="file" accept=".conf,.txt,text/plain"><span class="field-help">选择文件后可编辑，点击保存才会生效。最大 256 KiB。</span></label><label for="nginx-template-content">nginx 模板<textarea id="nginx-template-content" class="script-editor" maxlength="262144" spellcheck="false" wrap="off">${esc(template.content)}</textarea></label><p class="field-help">使用 {{SERVICE_DOMAIN}}、{{CERT_DIR}}、{{PROXY_PORT}} 三个占位符。证书路径建议用双引号包裹。$host、$scheme 等 nginx 变量会保留。模板在目标机执行 nginx -t 才能检查语法；只读页不会在面板服务器执行命令。</p><p class="field-help">证书部署复用「客户端脚本」模板，要求包含 DOMAIN、CERT_DIR、LOG_DIR、LOG_FILE、NGINX_RELOAD_CMD 的单行配置及证书下载地址。快速部署时统一使用当前用户的 ~/ssl/证书域名/ 和 ~/ssl/logs/。</p><div class="form-actions"><button id="nginx-template-reset" type="button">载入默认模板</button><button type="submit" class="primary">保存模板</button></div></form>`;
+  $('#nginx-template-file').addEventListener('change', async event => {
+    const file = event.target.files[0]; if (!file) return;
+    try {
+      if (file.size > 262144) throw new Error('模板大小不能超过 256 KiB');
+      $('#nginx-template-content').value = await file.text();
+      toast('模板已导入，请检查后保存');
+    } catch(error) { toast(error.message); }
+  });
+  $('#nginx-template-reset').addEventListener('click', () => { $('#nginx-template-content').value = template.default_content; toast('默认模板已载入，保存后生效'); });
+  $('#nginx-template-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    await submit(event.target, async () => {
+      await api('/nginx-template', 'PUT', {content:$('#nginx-template-content').value});
+      toast('nginx 模板已保存');
+    });
+  });
 }
 function renderDomains() {
   const domains = state.domains.filter(d => d.name.includes(query.toLowerCase()));

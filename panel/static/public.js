@@ -1,5 +1,25 @@
 'use strict';
 let libraryData = {domains:[]};
+let deploymentCommands = null;
+let deploymentRequest = 0;
+
+function clearDeployment() {
+  deploymentRequest++;
+  deploymentCommands = null;
+  $('#deploy-results').hidden = true;
+  $('#deploy-error').textContent = '';
+}
+
+function updateDeploymentCertificates() {
+  const select = $('#deploy-certificate');
+  const previous = select.value;
+  const domains = libraryData.domains.filter(d => d.certificate.available && d.certificate.status !== 'expired');
+  select.innerHTML = '<option value="">请选择 SSL 证书</option>' + domains.map(d => `<option value="${esc(d.name)}">${esc(d.name)}${d.staging ? '（测试 CA）' : ''}</option>`).join('');
+  if (domains.some(d => d.name === previous)) select.value = previous;
+  $('#deploy-generate').disabled = !domains.length;
+  $('#deploy-availability').textContent = domains.length ? '' : '暂无可用证书，请先联系管理员签发证书。';
+  if (previous && select.value !== previous) clearDeployment();
+}
 function renderLibrary() {
   const script = $('#client-script');
   script.hidden = !libraryData.script?.available;
@@ -20,14 +40,36 @@ async function refreshLibrary() {
   try {
     const response = await fetch('/api/certificates');
     if (!response.ok) throw new Error('无法读取证书，请稍后重试');
-    libraryData = await response.json(); renderLibrary();
+    libraryData = await response.json(); renderLibrary(); updateDeploymentCertificates();
     $('#updated').textContent = '更新于 ' + new Date().toLocaleTimeString('zh-CN', {hour12:false});
-  } catch (error) { $('#client-script').hidden = true; $('#library').innerHTML = `<div class="panel empty"><h3>读取失败</h3><p>${esc(error.message)}</p></div>`; }
+  } catch (error) { clearDeployment(); $('#deploy-generate').disabled = true; $('#deploy-availability').textContent = '证书读取失败，请刷新后重试。'; $('#client-script').hidden = true; $('#library').innerHTML = `<div class="panel empty"><h3>读取失败</h3><p>${esc(error.message)}</p></div>`; }
   finally { $('#refresh').disabled = false; }
 }
 $('#search').addEventListener('input', renderLibrary);
 $('#refresh').addEventListener('click', refreshLibrary);
+$('#deploy-form').addEventListener('input', clearDeployment);
+$('#deploy-form').addEventListener('change', clearDeployment);
+$('#deploy-form').addEventListener('submit', async event => {
+  event.preventDefault(); clearDeployment();
+  const request = deploymentRequest;
+  const button = $('#deploy-generate'); button.disabled = true;
+  try {
+    const response = await fetch('/api/quick-deploy', {method:'POST', headers:{'Content-Type':'application/json','X-Panel-Request':'1'}, body:JSON.stringify({certificate_domain:$('#deploy-certificate').value,service_domain:$('#deploy-domain').value.trim(),proxy_port:Number($('#deploy-port').value)})});
+    const result = await response.json();
+    if (request !== deploymentRequest) return;
+    if (!response.ok) throw new Error(Array.isArray(result.detail) ? result.detail.map(d => d.msg).join('；') : result.detail || '生成失败');
+    deploymentCommands = result;
+    $('#deploy-cert-command').textContent = result.certificate_command;
+    $('#deploy-nginx-command').textContent = result.nginx_command;
+    $('#deploy-results').hidden = false;
+    const selected = libraryData.domains.find(d => d.name === $('#deploy-certificate').value);
+    $('#deploy-error').textContent = selected?.staging ? '所选证书来自测试 CA，浏览器不会信任此证书。' : '';
+  } catch(error) { if (request === deploymentRequest) $('#deploy-error').textContent = error.message; }
+  finally { button.disabled = !libraryData.domains.some(d => d.certificate.available && d.certificate.status !== 'expired'); }
+});
 document.addEventListener('click', event => {
+  const deployCopy = event.target.closest('[data-deploy-copy]');
+  if (deployCopy && deploymentCommands) copyText(deploymentCommands[deployCopy.dataset.deployCopy]);
   const copy = event.target.closest('[data-copy]'); if (copy) copyText(copy.dataset.copy);
   const wget = event.target.closest('[data-wget]'); if (wget) copyText(wgetCommand(location.origin, wget.dataset.wget));
 });

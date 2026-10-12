@@ -11,7 +11,7 @@ function enhanceSelects(root = document) {
     const trigger = document.createElement('button'); trigger.type = 'button'; trigger.className = 'select-trigger';
     trigger.id = id; trigger.setAttribute('role','combobox'); trigger.setAttribute('aria-haspopup','listbox');
     trigger.setAttribute('aria-expanded','false'); trigger.setAttribute('aria-controls',id+'-list');
-    const caption = select.closest('label')?.firstChild?.textContent.trim() || select.name;
+    const caption = select.getAttribute('aria-label') || select.closest('label')?.firstChild?.textContent.trim() || select.name;
     trigger.setAttribute('aria-label',caption);
     const menu = document.createElement('div'); menu.className = 'select-menu'; menu.id = id+'-list'; menu.hidden = true;
     menu.setAttribute('role','listbox'); menu.setAttribute('aria-label',caption);
@@ -20,6 +20,9 @@ function enhanceSelects(root = document) {
     function options() { return Array.from(select.options); }
     function paint() {
       trigger.disabled = select.disabled;
+      trigger.setAttribute('aria-required',String(select.required));
+      if (select.disabled && !menu.hidden) close();
+      if (active >= select.options.length) active = select.selectedIndex;
       trigger.replaceChildren();
       const text = document.createElement('span'); text.textContent = select.selectedOptions[0]?.textContent || '请选择';
       const arrow = document.createElement('span'); arrow.className = 'select-arrow'; arrow.setAttribute('aria-hidden','true');
@@ -28,7 +31,8 @@ function enhanceSelects(root = document) {
       options().forEach((option,index) => {
         const row = document.createElement('div'); row.className = 'select-option'; row.id = id+'-option-'+index;
         row.setAttribute('role','option'); row.setAttribute('aria-selected',String(index===select.selectedIndex));
-        row.setAttribute('aria-disabled',String(option.disabled)); row.textContent = option.textContent;
+        row.setAttribute('aria-disabled',String(option.disabled || option.parentElement.disabled)); row.textContent = option.textContent;
+        row.hidden = option.hidden;
         row.classList.toggle('highlighted',index===active); row.dataset.index = index;
         menu.append(row);
       });
@@ -45,8 +49,10 @@ function enhanceSelects(root = document) {
       active=index;paint();document.getElementById(id+'-option-'+active)?.scrollIntoView({block:'nearest'});
     }
     function choose(index) {
-      if(index<0||options()[index]?.disabled)return;
+      const option=options()[index];
+      if(!option||option.disabled||option.parentElement.disabled||option.hidden)return;
       select.selectedIndex=index;active=index;close();paint();
+      trigger.removeAttribute('aria-invalid');
       select.dispatchEvent(new Event('change',{bubbles:true}));trigger.focus();
     }
     trigger.addEventListener('click',()=>menu.hidden?open():close());
@@ -58,7 +64,7 @@ function enhanceSelects(root = document) {
       if(event.key==='Tab'){close();return;}
       if(['ArrowDown','ArrowUp','Home','End'].includes(event.key)) {
         event.preventDefault();if(menu.hidden)open();
-        const enabled=options().map((o,i)=>o.disabled?-1:i).filter(i=>i>=0);
+        const enabled=options().map((o,i)=>o.disabled||o.parentElement.disabled||o.hidden?-1:i).filter(i=>i>=0);
         if(!enabled.length)return;
         const position=enabled.indexOf(active);
         const next=event.key==='Home'?enabled[0]:event.key==='End'?enabled[enabled.length-1]:enabled[Math.max(0,Math.min(enabled.length-1,position+(event.key==='ArrowDown'?1:-1)))];
@@ -68,13 +74,35 @@ function enhanceSelects(root = document) {
       if(event.key.length===1&&!event.ctrlKey&&!event.metaKey&&!event.altKey){
         event.preventDefault();if(menu.hidden)open();
         const time=Date.now();typed=time-typedAt>800?event.key:typed+event.key;typedAt=time;
-        const index=options().findIndex(o=>!o.disabled&&o.textContent.toLowerCase().startsWith(typed.toLowerCase()));if(index>=0)move(index);
+        const index=options().findIndex(o=>!o.disabled&&!o.parentElement.disabled&&!o.hidden&&o.textContent.toLowerCase().startsWith(typed.toLowerCase()));if(index>=0)move(index);
       }
     });
-    select.addEventListener('change',()=>{active=select.selectedIndex;paint();});
+    select.addEventListener('change',()=>{active=select.selectedIndex;trigger.removeAttribute('aria-invalid');paint();});
+    // Required hidden selects still participate in form validation; focus the visible control.
+    select.addEventListener('invalid',event=>{
+      event.preventDefault();trigger.setAttribute('aria-invalid','true');trigger.focus();open();
+    });
+    new MutationObserver(()=>{active=select.selectedIndex;paint();}).observe(select,{
+      childList:true,subtree:true,characterData:true,attributes:true,
+      attributeFilter:['disabled','selected','hidden','label','value','required']
+    });
+    select.form?.addEventListener('reset',()=>{
+      queueMicrotask(()=>{active=select.selectedIndex;trigger.removeAttribute('aria-invalid');close();paint();});
+    });
     paint();
   });
 }
 document.addEventListener('click',event=>{if(openSelect&&!openSelect.wrapper.contains(event.target))openSelect.close();});
 document.addEventListener('focusin',event=>{if(openSelect&&!openSelect.wrapper.contains(event.target))openSelect.close();});
 document.addEventListener('close',()=>openSelect?.close(),true);
+
+// Static forms and dynamically inserted editors use the same controls on both pages.
+function initializeSelects() {
+  enhanceSelects();
+  new MutationObserver(()=>{
+    if(openSelect&&!openSelect.wrapper.isConnected)openSelect.close();
+    enhanceSelects();
+  }).observe(document.body,{childList:true,subtree:true});
+}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',initializeSelects,{once:true});
+else initializeSelects();

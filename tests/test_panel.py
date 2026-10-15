@@ -399,6 +399,15 @@ def test_pages_and_cookie_security(apps):
     assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
 
 
+def test_admin_editors_are_not_polled_and_edge_reveal_is_hidden(apps):
+    admin = apps[0]
+    admin_js = admin.get("/assets/admin.js").text
+    style = admin.get("/assets/style.css").text
+    assert "['settings','script','deployment'].includes(tab)" in admin_js
+    assert "input[type=password]::-ms-reveal" in style
+    assert "input[type=password]::-ms-clear" in style
+
+
 def test_client_script_admin_edit_and_public_download(apps):
     admin, public, store, root = apps
     assert admin.get("/api/client-script").status_code == 401

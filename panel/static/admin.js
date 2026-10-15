@@ -218,4 +218,4 @@ $('#login-form').addEventListener('submit',async event=>{event.preventDefault();
 $('#logout').addEventListener('click',async()=>{try{await api('/logout','POST');showLogin();}catch(error){toast(error.message);}});
 async function boot(){try{await enter(await api('/session'));}catch{showLogin();}}
 boot();
-setInterval(async()=>{if(!csrf)return;try{await reload(!['settings','script'].includes(tab)&&!document.querySelector('dialog[open]')&&document.activeElement?.id!=='domain-search');await updateLog();}catch(error){if(csrf)toast(error.message);}},5000);
+setInterval(async()=>{if(!csrf)return;try{await reload(!['settings','script','deployment'].includes(tab)&&!document.querySelector('dialog[open]')&&document.activeElement?.id!=='domain-search');await updateLog();}catch(error){if(csrf)toast(error.message);}},5000);

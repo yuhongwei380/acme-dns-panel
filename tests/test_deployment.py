@@ -75,6 +75,40 @@ def test_template_auth_and_generation_validation(apps):
     assert public.post("/api/quick-deploy", json=payload).status_code == 409
 
 
+def test_certificate_only_generation_and_required_fields(apps):
+    admin, public, store, root = apps
+    authenticate(admin)
+    account_and_domain(admin)
+    make_certificate(root)
+    mark_issued(store, root)
+    original = Path("ssl-renew.sh").read_text(encoding="utf-8")
+    store.set_setting("client_script", original)
+    # Certificate-only deployment must not depend on the nginx template.
+    store.set_setting("nginx_template", "server {}")
+    public.headers.update({"X-Panel-Request": "1"})
+    for fields in ({}, {"service_domain": None, "proxy_port": None},
+                   {"service_domain": "  ", "proxy_port": None}):
+        payload = {"certificate_domain": "example.com", "public_path": "/download/", **fields}
+        response = public.post("/api/quick-deploy", json=payload)
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["nginx_command"] == ""
+        command = data["certificate_command"]
+        assert 'mkdir -p "$CERT_DIR"' in command
+        assert "http://testserver/download/example.com/ssl-renew.sh?deployment=1&public_path=%2Fdownload%2F" in command
+        assert '0 3 * * * ACME_SKIP_NGINX_RELOAD=1 /bin/bash' in command
+        assert "/etc/nginx" not in command
+    assert store.setting("client_script") == original
+    for payload in ({}, {"certificate_domain": ""}, {"certificate_domain": None},
+                    {"certificate_domain": "example.com", "service_domain": "app.example.com"},
+                    {"certificate_domain": "example.com", "proxy_port": 8080},
+                    {"certificate_domain": "example.com", "service_domain": "", "proxy_port": 8080}):
+        assert public.post("/api/quick-deploy", json=payload).status_code == 422
+    assert public.post("/api/quick-deploy", json={"certificate_domain": "missing.org"}).status_code == 404
+    store.set_setting("client_script", "")
+    assert public.post("/api/quick-deploy", json={"certificate_domain": "example.com"}).status_code == 409
+
+
 def bash_executable():
     git_bash = Path("C:/Program Files/Git/bin/bash.exe")
     executable = str(git_bash) if os.name == "nt" and git_bash.exists() else shutil.which("bash")
@@ -126,10 +160,15 @@ RENEW
         "crontab": 'if [ "$1" = -l ]; then cat "$HOME/cron"; else cp "$1" "$HOME/cron"; fi\n',
         "flock": 'exit 0\n',
     }
-    command = commands("example.com", "app.example.com", 8000, "http://certs:8001", DEFAULT_NGINX_TEMPLATE)["certificate_command"]
-    for _ in range(2):
-        result = run_commands(command, tmp_path, mocks)
+    # Switching modes replaces the same certificate's cron job, including its reload policy.
+    for service in (None, None, "app.example.com", "app.example.com", None):
+        generated = commands("example.com", service, 8000 if service else None, "http://certs:8001", DEFAULT_NGINX_TEMPLATE)
+        result = run_commands(generated["certificate_command"], tmp_path, mocks)
         assert result.returncode == 0, result.stderr
+        cron = (home / "cron").read_text()
+        assert cron.count("# acme-dns-panel:example.com") == 1
+        assert ("0 3 * * * ACME_SKIP_NGINX_RELOAD=1 /bin/bash" in cron) is (service is None)
+        assert bool(generated["nginx_command"]) is (service is not None)
     cron = (home / "cron").read_text()
     assert "existing-job" in cron and "other-cert" in cron
     assert cron.count("# acme-dns-panel:example.com") == 1
@@ -181,7 +220,8 @@ def test_shipped_renewal_script_and_generated_commands_parse(tmp_path):
     template = Path("ssl-renew.sh").read_text(encoding="utf-8")
     script = deployment_script(template, "example.com", "https://certs.example.org:8001")
     generated = commands("example.com", "app.example.com", 8000, "https://certs.example.org:8001", DEFAULT_NGINX_TEMPLATE)
-    for content in (script, *generated.values()):
+    certificate_only = commands("example.com", None, None, "https://certs.example.org:8001", "")
+    for content in (script, *generated.values(), certificate_only["certificate_command"]):
         result = subprocess.run([bash_executable(), "-n"], input=content, text=True, capture_output=True)
         assert result.returncode == 0, result.stderr
 

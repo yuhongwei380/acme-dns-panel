@@ -89,7 +89,10 @@ def bash_command(body):
 
 
 def commands(domain, service, port, base, template):
-    validate_template(template)
+    if (service is None) != (port is None):
+        raise ValueError("服务域名和反向代理端口需同时填写，或同时留空以仅部署证书")
+    if service is not None:
+        validate_template(template)
     # Ordinary absolute home paths only: safe for nginx strings and cron's parser.
     preamble = '''set -euo pipefail
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -129,10 +132,14 @@ fi
 '''
     marker = "# acme-dns-panel:" + domain
     certificate += "awk -v marker=" + shlex.quote(marker) + " 'substr($0, length($0)-length(marker)+1) != marker' \"$WORK_DIR/current.cron\" >\"$WORK_DIR/next.cron\"\n"
-    certificate += "printf '0 3 * * * /bin/bash \"%s/ssl-renew.sh\" " + marker + "\\n' \"$CERT_DIR\" >>\"$WORK_DIR/next.cron\"\n"
+    renewal_env = "ACME_SKIP_NGINX_RELOAD=1 " if service is None else ""
+    certificate += "printf '0 3 * * * " + renewal_env + "/bin/bash \"%s/ssl-renew.sh\" " + marker + "\\n' \"$CERT_DIR\" >>\"$WORK_DIR/next.cron\"\n"
     certificate += '''crontab "$WORK_DIR/next.cron"
 echo "证书部署完成，已添加每日 03:00 更新任务（目标服务器时区）。"
 '''
+
+    if service is None:
+        return {"certificate_command": bash_command(certificate), "nginx_command": ""}
 
     values = {"SERVICE_DOMAIN": service, "PROXY_PORT": str(port), "CERT_DIR": "{{CERT_DIR}}"}
     rendered = re.sub(r"\{\{(SERVICE_DOMAIN|PROXY_PORT|CERT_DIR)\}\}", lambda m: values[m[1]], template)

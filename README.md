@@ -83,7 +83,7 @@ wget "http://${SERVER_IP}:8001/example.com/privkey.pem"
 
 客户端脚本须先配置，除 `DOMAIN`、证书下载地址外，还需包含 `CERT_DIR`、`LOG_DIR`、`LOG_FILE`、`NGINX_RELOAD_CMD` 单行配置。
 
-在只读页选择未过期的证书，填写服务域名和反向代理端口，生成两组命令，依次在目标 Linux 服务器执行：
+在只读页必选一张未过期的证书。服务域名和反向代理端口同时留空时，仅生成创建目录、下载证书及定时更新命令，不配置或重载 nginx；两项都填写时生成以下两组命令，依次在目标 Linux 服务器执行：
 
 1. **部署证书**：需要 Bash、wget、OpenSSL、crontab、flock 及可访问的下载地址。证书和脚本保存到 `~/ssl/<证书主域名>/`，日志保存到 `~/ssl/logs/`；保留已有 cron，并添加每天 03:00（目标机时区）的更新任务，重复执行会去重。
 2. **配置 nginx**：需已安装并启动 nginx，且 `http` 块加载 `/etc/nginx/conf.d/*.conf`。命令备份并写入 `/etc/nginx/conf.d/<服务域名>.conf`，通过 `nginx -t` 后重载，失败则恢复原配置。

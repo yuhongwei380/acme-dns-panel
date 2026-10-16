@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import ipaddress
 import logging
+import math
 import re
 import secrets
 import time
@@ -15,7 +16,7 @@ from urllib.parse import urlsplit
 from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from . import __version__
 from .acme import JobManager
@@ -146,8 +147,8 @@ class NginxTemplateInput(ClientScriptInput):
 
 class DeploymentInput(BaseModel):
     certificate_domain: str
-    service_domain: str
-    proxy_port: int = Field(ge=1, le=65535, strict=True)
+    service_domain: Optional[str] = None
+    proxy_port: Optional[int] = Field(default=None, ge=1, le=65535, strict=True)
     public_path: Optional[str] = Field(default=None, max_length=1024)
 
     @field_validator("public_path")
@@ -155,10 +156,21 @@ class DeploymentInput(BaseModel):
     def download_path(cls, value):
         return public_path(value) if value is not None else None
 
+    @field_validator("service_domain", mode="before")
+    @classmethod
+    def optional_service(cls, value):
+        return None if isinstance(value, str) and not value.strip() else value
+
     @field_validator("certificate_domain", "service_domain")
     @classmethod
     def domain_name(cls, value):
-        return normalize_domain(value)
+        return normalize_domain(value) if value is not None else None
+
+    @model_validator(mode="after")
+    def paired_proxy_fields(self):
+        if (self.service_domain is None) != (self.proxy_port is None):
+            raise ValueError("服务域名和反向代理端口需同时填写，或同时留空以仅部署证书")
+        return self
 
 
 def create_apps(config=None, runner=None):
@@ -219,11 +231,14 @@ def create_apps(config=None, runner=None):
     @admin.post("/api/login")
     async def login(payload: Login, request: Request):
         ip = request.client.host if request.client else "unknown"
-        recent = [t for t in failures.get(ip, []) if t > time.monotonic() - 300]
+        current_time = time.monotonic()
+        recent = [t for t in failures.get(ip, []) if t > current_time - 60]
         if len(recent) >= 10:
-            raise HTTPException(429, "尝试次数过多，请 5 分钟后重试")
+            retry_after = max(1, math.ceil(min(recent) + 60 - current_time))
+            raise HTTPException(429, "尝试次数过多，请 1 分钟后重试",
+                                headers={"Retry-After": str(retry_after)})
         # Count in-flight requests too, preventing parallel requests bypassing the limit.
-        recent.append(time.monotonic())
+        recent.append(current_time)
         failures[ip] = recent
         # Password hashing is intentionally outside the event loop.
         valid = await run_blocking(check_password, payload.password, store.setting("password"))
@@ -334,10 +349,13 @@ def create_apps(config=None, runner=None):
 
     async def confirm_removal(payload: RemovalInput, request: Request, current=Depends(session)):
         ip = request.client.host if request.client else "unknown"
-        recent = [t for t in removal_failures.get(ip, []) if t > time.monotonic() - 300]
+        current_time = time.monotonic()
+        recent = [t for t in removal_failures.get(ip, []) if t > current_time - 60]
         if len(recent) >= 10:
-            raise HTTPException(429, "密码确认尝试次数过多，请 5 分钟后重试")
-        recent.append(time.monotonic())
+            retry_after = max(1, math.ceil(min(recent) + 60 - current_time))
+            raise HTTPException(429, "密码确认尝试次数过多，请 1 分钟后重试",
+                                headers={"Retry-After": str(retry_after)})
+        recent.append(current_time)
         removal_failures[ip] = recent
         if not await run_blocking(check_password, payload.password, store.setting("password")):
             raise HTTPException(403, "管理员密码不正确，未执行移除")
@@ -493,7 +511,7 @@ def create_apps(config=None, runner=None):
         info = managed_certificate(config.root, row)
         if not info["available"] or info["status"] == "expired":
             raise HTTPException(409, "所选证书尚不可用或已过期")
-        if not covers_domain(info["sans"], payload.service_domain):
+        if payload.service_domain is not None and not covers_domain(info["sans"], payload.service_domain):
             raise HTTPException(422, "所选证书未覆盖服务域名，请选择匹配的证书")
         base = download_base(request, payload.public_path)
         try:

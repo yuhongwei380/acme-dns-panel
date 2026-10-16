@@ -2,8 +2,10 @@ import asyncio
 import json
 import os
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -82,11 +84,24 @@ def test_auth_password_and_csrf(apps):
     assert admin.get("/api/session").status_code == 401
 
 
-def test_login_rate_limit(apps):
+def test_login_rate_limit(apps, monkeypatch):
     client = apps[0]
+    clock = [1000.0]
+    monkeypatch.setattr("panel.web.time", SimpleNamespace(monotonic=lambda: clock[0], time=time.time))
     for _ in range(10):
         assert client.post("/api/login", json={"password": "bad"}, headers={"X-Panel-Request": "1"}).status_code == 401
-    assert client.post("/api/login", json={"password": "admin"}, headers={"X-Panel-Request": "1"}).status_code == 429
+    response = client.post("/api/login", json={"password": "admin"}, headers={"X-Panel-Request": "1"})
+    assert response.status_code == 429
+    assert response.json()["detail"] == "尝试次数过多，请 1 分钟后重试"
+    assert response.headers["Retry-After"] == "60"
+    clock[0] += 58.5
+    response = client.post("/api/login", json={"password": "admin"}, headers={"X-Panel-Request": "1"})
+    assert response.status_code == 429 and response.headers["Retry-After"] == "2"
+    clock[0] += 0.5
+    response = client.post("/api/login", json={"password": "admin"}, headers={"X-Panel-Request": "1"})
+    assert response.status_code == 429 and response.headers["Retry-After"] == "1"
+    clock[0] += 1
+    authenticate(client)
 
 
 @pytest.mark.parametrize("resource", ["domains", "accounts"])
@@ -123,15 +138,26 @@ def test_removal_requires_password_and_preserves_data_on_failure(apps, resource)
         assert (root / "ssl-renew/example.com/fullchain.pem").exists()
 
 
-def test_removal_password_attempts_are_limited_across_resources(apps):
+def test_removal_password_attempts_are_limited_across_resources(apps, monkeypatch):
     admin, public, store, root = apps
     authenticate(admin)
     account_id, domain_id = account_and_domain(admin)
+    clock = [1000.0]
+    monkeypatch.setattr("panel.web.time", SimpleNamespace(monotonic=lambda: clock[0], time=time.time))
     for attempt in range(10):
         endpoint = "/api/domains/" + domain_id if attempt % 2 else "/api/accounts/" + account_id
         assert admin.request("DELETE", endpoint, json={"password": "wrong"}).status_code == 403
-    assert admin.request("DELETE", "/api/domains/" + domain_id, json={"password": "admin"}).status_code == 429
+    response = admin.request("DELETE", "/api/domains/" + domain_id, json={"password": "admin"})
+    assert response.status_code == 429
+    assert response.json()["detail"] == "密码确认尝试次数过多，请 1 分钟后重试"
+    assert response.headers["Retry-After"] == "60"
     assert store.one("SELECT id FROM domains WHERE id=?", (domain_id,))
+    clock[0] += 59
+    response = admin.request("DELETE", "/api/domains/" + domain_id, json={"password": "admin"})
+    assert response.status_code == 429 and response.headers["Retry-After"] == "1"
+    clock[0] += 1
+    assert admin.request("DELETE", "/api/domains/" + domain_id, json={"password": "admin"}).status_code == 200
+    assert not store.one("SELECT id FROM domains WHERE id=?", (domain_id,))
 
 
 def test_removal_checks_current_password_after_password_change(apps):

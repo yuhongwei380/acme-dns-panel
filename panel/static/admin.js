@@ -1,6 +1,30 @@
 'use strict';
 let csrf = '', tab = 'domains', query = '', logId = null;
 let state = {accounts:[],domains:[],providers:[],jobs:[],settings:{}};
+const cooldowns = {login:{until:0,timer:null}, removal:{until:0,timer:null}};
+function cooldownRemaining(kind) {
+  return Math.max(0, Math.ceil((cooldowns[kind].until - Date.now()) / 1000));
+}
+function renderCooldown(kind) {
+  if (kind === 'removal' && !$('#confirm').open) return;
+  const remaining = cooldownRemaining(kind);
+  const button = kind === 'login' ? $('#login-form button[type="submit"]') : $('#confirm-yes');
+  const message = kind === 'login' ? $('#login-error') : $('#confirm-error');
+  button.disabled = remaining > 0;
+  button.textContent = remaining ? `${remaining} 秒后重试` : kind === 'login' ? '登录管理面板' : '确认移除';
+  const prefix = kind === 'login' ? '尝试次数过多' : '密码确认尝试次数过多';
+  message.textContent = remaining ? `${prefix}，请 ${remaining} 秒后重试` : '限制已解除，请重新尝试';
+}
+function startCooldown(kind, seconds) {
+  const cooldown = cooldowns[kind];
+  clearInterval(cooldown.timer);
+  cooldown.until = Date.now() + seconds * 1000;
+  renderCooldown(kind);
+  cooldown.timer = setInterval(() => {
+    renderCooldown(kind);
+    if (!cooldownRemaining(kind)) { clearInterval(cooldown.timer); cooldown.timer = null; }
+  }, 1000);
+}
 async function api(path, method = 'GET', body) {
   const headers = {'X-Panel-Request':'1'};
   if (csrf) headers['X-CSRF-Token'] = csrf;
@@ -9,7 +33,10 @@ async function api(path, method = 'GET', body) {
   const data = await response.json();
   if (!response.ok) {
     if (response.status === 401 && path !== '/login') showLogin();
-    throw new Error(Array.isArray(data.detail) ? data.detail.map(d => d.msg).join('；') : data.detail || '请求失败');
+    const error = new Error(Array.isArray(data.detail) ? data.detail.map(d => d.msg).join('；') : data.detail || '请求失败');
+    error.status = response.status;
+    error.retryAfter = Number(response.headers.get('Retry-After')) || 60;
+    throw error;
   }
   return data;
 }
@@ -176,18 +203,24 @@ function confirmAction(title,message,action) {
     closeButtons.forEach(close => { close.disabled = true; });
     try { await action(password); if ($('#confirm-password') === input) dialog.close(); }
     catch(error) {
-      if ($('#confirm-password') === input) { $('#confirm-error').textContent = error.message; input.focus(); }
+      if ($('#confirm-password') === input) {
+        if (error.status === 429) startCooldown('removal', error.retryAfter);
+        else $('#confirm-error').textContent = error.message;
+        input.focus();
+      }
     }
     finally {
       closeButtons.forEach(close => { close.disabled = false; });
-      button.disabled = false; button.textContent = '确认移除';
+      if (cooldownRemaining('removal')) renderCooldown('removal');
+      else { button.disabled = false; button.textContent = '确认移除'; }
     }
   };
   dialog.showModal();
+  if (cooldownRemaining('removal')) renderCooldown('removal');
   $('#confirm-password').focus();
 }
 $('#confirm').addEventListener('cancel', event => {
-  if ($('#confirm-yes').disabled) event.preventDefault();
+  if ($('#confirm-yes').disabled && !cooldownRemaining('removal')) event.preventDefault();
 });
 $('#confirm').addEventListener('close', () => {
   $('#confirm-password-field').replaceChildren();
@@ -214,7 +247,18 @@ document.addEventListener('click', async event=>{
     if(action==='download'){const domain=state.domains.find(d=>d.id===id);await copyText(wgetCommand(publicBase(),domain.name));}
   } catch(error){toast(error.message);} finally{button.disabled=false;}
 });
-$('#login-form').addEventListener('submit',async event=>{event.preventDefault();const button=$('button[type="submit"]',event.target);button.disabled=true;$('#login-error').textContent='';try{const session=await api('/login','POST',{password:$('#login-password').value});await enter(session);}catch(error){$('#login-error').textContent=error.message;}finally{button.disabled=false;}});
+$('#login-form').addEventListener('submit',async event=>{
+  event.preventDefault();
+  const button=$('button[type="submit"]',event.target);
+  if (button.disabled || cooldownRemaining('login')) return;
+  button.disabled=true;$('#login-error').textContent='';
+  try{const session=await api('/login','POST',{password:$('#login-password').value});await enter(session);}
+  catch(error){
+    if (error.status === 429) startCooldown('login', error.retryAfter);
+    else $('#login-error').textContent=error.message;
+  }
+  finally{if (!cooldownRemaining('login')) button.disabled=false;}
+});
 $('#logout').addEventListener('click',async()=>{try{await api('/logout','POST');showLogin();}catch(error){toast(error.message);}});
 async function boot(){try{await enter(await api('/session'));}catch{showLogin();}}
 boot();

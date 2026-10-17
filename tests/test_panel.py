@@ -88,7 +88,7 @@ def test_login_rate_limit(apps, monkeypatch):
     client = apps[0]
     clock = [1000.0]
     monkeypatch.setattr("panel.web.time", SimpleNamespace(monotonic=lambda: clock[0], time=time.time))
-    for _ in range(10):
+    for _ in range(5):
         assert client.post("/api/login", json={"password": "bad"}, headers={"X-Panel-Request": "1"}).status_code == 401
     response = client.post("/api/login", json={"password": "admin"}, headers={"X-Panel-Request": "1"})
     assert response.status_code == 429
@@ -144,7 +144,7 @@ def test_removal_password_attempts_are_limited_across_resources(apps, monkeypatc
     account_id, domain_id = account_and_domain(admin)
     clock = [1000.0]
     monkeypatch.setattr("panel.web.time", SimpleNamespace(monotonic=lambda: clock[0], time=time.time))
-    for attempt in range(10):
+    for attempt in range(5):
         endpoint = "/api/domains/" + domain_id if attempt % 2 else "/api/accounts/" + account_id
         assert admin.request("DELETE", endpoint, json={"password": "wrong"}).status_code == 403
     response = admin.request("DELETE", "/api/domains/" + domain_id, json={"password": "admin"})

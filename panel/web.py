@@ -233,7 +233,7 @@ def create_apps(config=None, runner=None):
         ip = request.client.host if request.client else "unknown"
         current_time = time.monotonic()
         recent = [t for t in failures.get(ip, []) if t > current_time - 60]
-        if len(recent) >= 10:
+        if len(recent) >= 5:
             retry_after = max(1, math.ceil(min(recent) + 60 - current_time))
             raise HTTPException(429, "尝试次数过多，请 1 分钟后重试",
                                 headers={"Retry-After": str(retry_after)})
@@ -351,7 +351,7 @@ def create_apps(config=None, runner=None):
         ip = request.client.host if request.client else "unknown"
         current_time = time.monotonic()
         recent = [t for t in removal_failures.get(ip, []) if t > current_time - 60]
-        if len(recent) >= 10:
+        if len(recent) >= 5:
             retry_after = max(1, math.ceil(min(recent) + 60 - current_time))
             raise HTTPException(429, "密码确认尝试次数过多，请 1 分钟后重试",
                                 headers={"Retry-After": str(retry_after)})

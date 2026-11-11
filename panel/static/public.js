@@ -57,12 +57,25 @@ $('#deploy-form').addEventListener('input', clearDeployment);
 $('#deploy-form').addEventListener('change', clearDeployment);
 $('#deploy-form').addEventListener('submit', async event => {
   event.preventDefault(); clearDeployment();
+  const certificate = $('#deploy-certificate');
+  const serviceDomain = $('#deploy-domain').value.trim();
+  const proxyPort = $('#deploy-port').value;
+  if (!certificate.value) {
+    $('#deploy-error').textContent = '请选择 SSL 证书';
+    certificate.reportValidity();
+    return;
+  }
+  if (Boolean(serviceDomain) !== Boolean(proxyPort)) {
+    $('#deploy-error').textContent = '服务域名和反向代理端口需同时填写，或同时留空以仅部署证书';
+    (serviceDomain ? $('#deploy-port') : $('#deploy-domain')).focus();
+    return;
+  }
   const request = deploymentRequest;
   const button = $('#deploy-generate'); button.disabled = true;
   const url = publicUrl('api/quick-deploy');
   const diagnostic = ['时间：' + new Date().toLocaleString('zh-CN', {hour12:false}), '请求：POST ' + url];
   try {
-    const response = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json','X-Panel-Request':'1'}, body:JSON.stringify({certificate_domain:$('#deploy-certificate').value,service_domain:$('#deploy-domain').value.trim(),proxy_port:Number($('#deploy-port').value),public_path:publicPath})});
+    const response = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json','X-Panel-Request':'1'}, body:JSON.stringify({certificate_domain:certificate.value,service_domain:serviceDomain || null,proxy_port:proxyPort ? Number(proxyPort) : null,public_path:publicPath})});
     diagnostic.push('HTTP 状态：' + response.status, '请求编号：' + (response.headers.get('X-Request-ID') || '未提供（请检查代理或服务版本）'));
     const body = await response.text();
     if (request !== deploymentRequest) return;
@@ -78,6 +91,9 @@ $('#deploy-form').addEventListener('submit', async event => {
     deploymentCommands = result;
     $('#deploy-cert-command').textContent = result.certificate_command;
     $('#deploy-nginx-command').textContent = result.nginx_command;
+    $('#deploy-nginx-section').hidden = !result.nginx_command;
+    $('#deploy-reload-note').hidden = !result.nginx_command;
+    $('#deploy-cert-title').textContent = result.nginx_command ? '1. 快速部署证书' : '快速部署证书';
     $('#deploy-results').hidden = false;
     const selected = libraryData.domains.find(d => d.name === $('#deploy-certificate').value);
     $('#deploy-error').textContent = selected?.staging ? '所选证书来自测试 CA，浏览器不会信任此证书。' : '';
